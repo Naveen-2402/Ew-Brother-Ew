@@ -47,7 +47,7 @@ class TasksScreen extends StatelessWidget {
                 : ReorderableListView.builder(
                     padding: const EdgeInsets.only(top: 8, bottom: 12),
                     itemCount: vm.open.length,
-                    onReorder: vm.reorder,
+                    onReorderItem: vm.reorder,
                     proxyDecorator: (child, _, _) => Material(
                       color: c.surfaceHigh,
                       elevation: 6,

@@ -70,9 +70,9 @@ class TasksViewModel extends ChangeNotifier {
 
   Future<void> save(Task t) => repo.update(t);
 
+  /// [newIndex] is already adjusted for the removed item (onReorderItem).
   Future<void> reorder(int oldIndex, int newIndex) async {
     final list = [...open];
-    if (newIndex > oldIndex) newIndex -= 1;
     final item = list.removeAt(oldIndex);
     list.insert(newIndex, item);
     open = list;

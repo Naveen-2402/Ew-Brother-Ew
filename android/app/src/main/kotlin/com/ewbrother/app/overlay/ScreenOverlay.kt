@@ -51,8 +51,8 @@ class ScreenOverlay(private val ctx: Context) {
         val onSecondary: () -> Unit = {},
     )
 
-    private val wm = ctx.getSystemService(WindowManager::class.java)
-    private val audio = ctx.getSystemService(AudioManager::class.java)
+    private val wm = ctx.getSystemService(WindowManager::class.java)!!
+    private val audio = ctx.getSystemService(AudioManager::class.java)!!
     private val handler = Handler(Looper.getMainLooper())
     private var root: View? = null
     private var tick: Runnable? = null
@@ -230,7 +230,7 @@ class ScreenOverlay(private val ctx: Context) {
         root?.let { v ->
             try {
                 wm.removeView(v)
-            } catch (_: Exception) {
+            } catch (ignored: Exception) {
             }
         }
         root = null
@@ -252,7 +252,7 @@ class ScreenOverlay(private val ctx: Context) {
         try {
             audio.requestAudioFocus(req)
             focusRequest = req
-        } catch (_: Exception) {
+        } catch (ignored: Exception) {
         }
     }
 
@@ -260,7 +260,7 @@ class ScreenOverlay(private val ctx: Context) {
         focusRequest?.let {
             try {
                 audio.abandonAudioFocusRequest(it)
-            } catch (_: Exception) {
+            } catch (ignored: Exception) {
             }
         }
         focusRequest = null

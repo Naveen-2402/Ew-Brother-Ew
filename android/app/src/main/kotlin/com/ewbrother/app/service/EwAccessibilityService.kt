@@ -97,7 +97,7 @@ class EwAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         try {
             unregisterReceiver(screenOff)
-        } catch (_: Exception) {
+        } catch (ignored: Exception) {
         }
         if (::screen.isInitialized) screen.dismiss()
         if (::bubble.isInitialized) bubble.hide()

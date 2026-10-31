@@ -26,7 +26,7 @@ class Bubble(
     private val onMoved: (x: Int, y: Int) -> Unit,
     private val onLongPress: () -> Unit,
 ) {
-    private val wm = ctx.getSystemService(WindowManager::class.java)
+    private val wm = ctx.getSystemService(WindowManager::class.java)!!
     private val handler = Handler(Looper.getMainLooper())
     private var root: LinearLayout? = null
     private var count: TextView? = null
@@ -108,7 +108,7 @@ class Bubble(
         root?.let {
             try {
                 wm.removeView(it)
-            } catch (_: Exception) {
+            } catch (ignored: Exception) {
             }
         }
         root = null
@@ -154,7 +154,7 @@ class Bubble(
                         p.y = (startY + dy).toInt().coerceAtLeast(0)
                         try {
                             wm.updateViewLayout(v, p)
-                        } catch (_: Exception) {
+                        } catch (ignored: Exception) {
                         }
                     }
                 }

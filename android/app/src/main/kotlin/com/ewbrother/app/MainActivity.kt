@@ -143,7 +143,7 @@ class MainActivity : FlutterActivity() {
     // ---------------------------------------------------------------- permissions
 
     private fun permissions(): Map<String, Boolean> {
-        val pm = getSystemService(PowerManager::class.java)
+        val pm = getSystemService(PowerManager::class.java)!!
         return mapOf(
             "accessibility" to accessibilityEnabled(),
             "serviceRunning" to (EwAccessibilityService.instance != null),
@@ -274,7 +274,7 @@ class MainActivity : FlutterActivity() {
             Handler(Looper.getMainLooper()).post {
                 try {
                     channel?.invokeMethod(method, null)
-                } catch (_: Exception) {
+                } catch (ignored: Exception) {
                 }
             }
         }

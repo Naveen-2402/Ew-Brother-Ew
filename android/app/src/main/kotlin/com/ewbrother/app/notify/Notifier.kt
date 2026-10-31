@@ -31,7 +31,7 @@ object Notifier {
     const val ID_HABIT_BASE = 1000
 
     fun ensureChannels(ctx: Context) {
-        val nm = ctx.getSystemService(NotificationManager::class.java)
+        val nm = ctx.getSystemService(NotificationManager::class.java)!!
         nm.createNotificationChannel(
             NotificationChannel(CH_STATUS, "Monitor status", NotificationManager.IMPORTANCE_MIN).apply {
                 description = "Today's reel count and the monitor on/off button"
@@ -68,7 +68,7 @@ object Notifier {
 
     private fun short(s: String, max: Int = 20) = if (s.length <= max) s else s.take(max - 1) + "…"
 
-    private fun nm(ctx: Context) = ctx.getSystemService(NotificationManager::class.java)
+    private fun nm(ctx: Context) = ctx.getSystemService(NotificationManager::class.java)!!
 
     // ---------- status (monitor toggle) ----------
 

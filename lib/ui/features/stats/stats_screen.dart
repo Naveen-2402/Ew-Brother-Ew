@@ -29,7 +29,7 @@ class StatsScreen extends StatelessWidget {
               padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
               child: Text('Stats', style: context.type.headlineMedium),
             ),
-            SectionTitle('Reels, last 7 days'),
+            const SectionTitle('Reels, last 7 days'),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: Row(

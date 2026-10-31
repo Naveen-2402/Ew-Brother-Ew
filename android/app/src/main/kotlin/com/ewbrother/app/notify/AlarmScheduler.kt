@@ -48,7 +48,7 @@ object AlarmScheduler {
     }
 
     private fun set(ctx: Context, request: Int, kind: String, id: Long, at: Long?) {
-        val am = ctx.getSystemService(AlarmManager::class.java)
+        val am = ctx.getSystemService(AlarmManager::class.java)!!
         val intent = Intent(ctx, ActionReceiver::class.java)
             .setAction(ActionReceiver.ACTION_ALARM)
             .putExtra(ActionReceiver.EXTRA_KIND, kind)

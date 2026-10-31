@@ -13,7 +13,7 @@ import android.os.Process
 object UsageReader {
 
     fun hasAccess(ctx: Context): Boolean {
-        val ops = ctx.getSystemService(AppOpsManager::class.java)
+        val ops = ctx.getSystemService(AppOpsManager::class.java)!!
         val mode = if (Build.VERSION.SDK_INT >= 29) {
             ops.unsafeCheckOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), ctx.packageName)
         } else {
@@ -26,7 +26,7 @@ object UsageReader {
     /** List of maps {package, label, seconds} sorted by time, launcher and this app excluded. */
     fun foreground(ctx: Context, start: Long, end: Long): List<Map<String, Any>> {
         if (!hasAccess(ctx)) return emptyList()
-        val usm = ctx.getSystemService(UsageStatsManager::class.java)
+        val usm = ctx.getSystemService(UsageStatsManager::class.java)!!
         val events = usm.queryEvents(start, end) ?: return emptyList()
         val ev = UsageEvents.Event()
         val open = HashMap<String, Long>() // "pkg/class" -> resumed at
