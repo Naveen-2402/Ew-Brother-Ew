@@ -17,6 +17,8 @@ object Keys {
     const val LIMIT_REELS = "limit_reels"
     const val LIMIT_ACTION = "limit_action" // block | pause30
     const val DAY_RESET_HOUR = "day_reset_hour"
+    const val DAY_RESET_NEXT = "day_reset_next" // pending new hour, "" = none
+    const val DAY_RESET_NEXT_AFTER = "day_reset_next_after" // day key that must end first
     const val MESSAGES = "pause_messages" // JSON array of strings
     const val INTERRUPT_ON = "interrupt_on"
     const val FOCUS_ON = "focus_on"
@@ -56,6 +58,8 @@ object Keys {
         LIMIT_REELS to "100",
         LIMIT_ACTION to "block",
         DAY_RESET_HOUR to "4",
+        DAY_RESET_NEXT to "",
+        DAY_RESET_NEXT_AFTER to "",
         MESSAGES to DEFAULT_MESSAGES,
         INTERRUPT_ON to "0",
         FOCUS_ON to "0",

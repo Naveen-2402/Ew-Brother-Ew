@@ -36,6 +36,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<void> init() async {
     settings = await settingsRepo.load();
+    await _applyPendingResetHour();
     today = LogicalDay.keyFor(DateTime.now(), settings.dayResetHour);
     permissions = await bridge.permissions();
     WidgetsBinding.instance.addObserver(this);
@@ -50,7 +51,8 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     // Calendar day + 1 (not +24 h), so clock changes don't make it fire early.
     final next = DateTime(s.year, s.month, s.day + 1, settings.dayResetHour);
     final wait = next.difference(DateTime.now()) + const Duration(seconds: 2);
-    _dayTimer = Timer(wait.isNegative ? const Duration(seconds: 2) : wait, () {
+    _dayTimer = Timer(wait.isNegative ? const Duration(seconds: 2) : wait, () async {
+      if (database.isOpen) await _applyPendingResetHour();
       _checkDay();
       if (database.isOpen) signal.bump();
       _scheduleDayRollover();
@@ -79,10 +81,40 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // Skipped while a backup restore has the database closed; it reloads itself after.
     if (state == AppLifecycleState.resumed && database.isOpen) {
-      refreshPermissions();
-      _checkDay();
-      signal.bump();
+      _onResume();
     }
+  }
+
+  Future<void> _onResume() async {
+    await refreshPermissions();
+    await _applyPendingResetHour();
+    _checkDay();
+    signal.bump();
+  }
+
+  /// Same rule as Store.applyPendingResetHour in Kotlin: a new "day starts at" hour only
+  /// applies once the current day (under the old hour) is over, so it can't reset today's count.
+  Future<void> _applyPendingResetHour() async {
+    final next = settings.pendingResetHour;
+    if (next == null) return;
+    final current = LogicalDay.keyFor(DateTime.now(), settings.dayResetHour);
+    if (current.compareTo(settings.pendingResetAfter) <= 0) return;
+    await update({
+      SettingsKeys.dayResetHour: '$next',
+      SettingsKeys.dayResetNext: '',
+      SettingsKeys.dayResetNextAfter: '',
+    });
+  }
+
+  /// Settings > "New day starts at". Takes effect when the current day ends.
+  Future<void> setResetHour(int hour) async {
+    if (hour == settings.dayResetHour) {
+      if (settings.pendingResetHour != null) {
+        await update({SettingsKeys.dayResetNext: '', SettingsKeys.dayResetNextAfter: ''});
+      }
+      return;
+    }
+    await update({SettingsKeys.dayResetNext: '$hour', SettingsKeys.dayResetNextAfter: today});
   }
 
   void _checkDay() {
@@ -100,21 +132,37 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   Future<void> reloadSettings() async {
-    settings = await settingsRepo.load();
+    try {
+      settings = await settingsRepo.load();
+    } catch (_) {
+      return; // database closed (restore in progress); reopenAfterImport reloads
+    }
     _checkDay();
     notifyListeners();
   }
 
   /// Write settings, update the snapshot immediately, notify native.
-  Future<void> update(Map<String, String> values) async {
+  /// If the write fails the snapshot is rolled back, so the screen never shows an unsaved value.
+  Future<bool> update(Map<String, String> values) async {
+    final before = settings;
     settings = settings.merge(values);
     _checkDay();
     notifyListeners();
-    await settingsRepo.set(values);
+    try {
+      await settingsRepo.set(values);
+    } catch (_) {
+      settings = before;
+      _checkDay();
+      notifyListeners();
+      return false;
+    }
     if (values.containsKey(SettingsKeys.dayResetHour)) signal.bump();
+    return true;
   }
 
-  Future<void> setFlag(String key, bool on) => update({key: on ? '1' : '0'});
+  Future<void> setFlag(String key, bool on) async {
+    await update({key: on ? '1' : '0'});
+  }
 
   /// Re-read everything after a backup import replaced the database file.
   Future<void> reopenAfterImport() async {

@@ -78,7 +78,8 @@ class _HabitFormState extends State<_HabitForm> {
               controller: _name,
               autofocus: widget.habit == null,
               textCapitalization: TextCapitalization.sentences,
-              decoration: const InputDecoration(hintText: 'Drink water, walk, read 10 pages'),
+              maxLength: maxTitleLength,
+              decoration: const InputDecoration(hintText: 'Drink water, walk, read 10 pages', counterText: ''),
             ),
             const SizedBox(height: 16),
             Wrap(

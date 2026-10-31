@@ -7,6 +7,8 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
+import android.util.Log
 import android.provider.Settings
 import android.view.accessibility.AccessibilityEvent
 import com.ewbrother.app.MainActivity
@@ -35,6 +37,8 @@ class EwAccessibilityService : AccessibilityService() {
     private lateinit var screen: ScreenOverlay
     private lateinit var bubble: Bubble
 
+    private val mainHandler = Handler(Looper.getMainLooper())
+
     private var settings: Map<String, String> = Keys.DEFAULTS
 
     // Today's counts in memory: app key -> count / seconds.
@@ -57,10 +61,38 @@ class EwAccessibilityService : AccessibilityService() {
 
     private var imePackage: String? = null
 
-    private val screenOff = object : BroadcastReceiver() {
+    // Time you can't cheat by changing the phone's clock or time zone:
+    // wall time at service start, moved forward by the uptime clock (which can't be set by hand).
+    // Only automatic (network) time re-anchors it, so a manual change is ignored.
+    private var anchorWall = 0L
+    private var anchorElapsed = 0L
+
+    // When the current logical day really ends, on the uptime clock.
+    private var dayEndElapsed = 0L
+
+    private fun trustedNow(): Long = anchorWall + (SystemClock.elapsedRealtime() - anchorElapsed)
+
+    private fun anchorClock() {
+        anchorWall = System.currentTimeMillis()
+        anchorElapsed = SystemClock.elapsedRealtime()
+    }
+
+    private val systemEvents = object : BroadcastReceiver() {
         override fun onReceive(c: Context, i: Intent) {
-            if (i.action == Intent.ACTION_SCREEN_OFF) flushWatchTime(System.currentTimeMillis())
+            when (i.action) {
+                Intent.ACTION_SCREEN_OFF -> flushWatchTime(trustedNow())
+                Intent.ACTION_TIME_CHANGED -> if (autoTimeOn()) {
+                    anchorClock()
+                    if (day.isNotEmpty()) computeDayEnd()
+                }
+            }
         }
+    }
+
+    private fun autoTimeOn(): Boolean = try {
+        Settings.Global.getInt(contentResolver, Settings.Global.AUTO_TIME, 0) == 1
+    } catch (e: Exception) {
+        false
     }
 
     override fun onServiceConnected() {
@@ -85,10 +117,12 @@ class EwAccessibilityService : AccessibilityService() {
                 bubble.hide()
             },
         )
+        anchorClock()
         reload()
-        imePackage = Settings.Secure.getString(contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)
-            ?.substringBefore('/')
-        registerReceiver(screenOff, IntentFilter(Intent.ACTION_SCREEN_OFF))
+        refreshImePackage()
+        val filter = IntentFilter(Intent.ACTION_SCREEN_OFF)
+        filter.addAction(Intent.ACTION_TIME_CHANGED)
+        registerReceiver(systemEvents, filter)
         Notifier.refreshStatus(this)
         TodayWidget.updateAll(this)
         MainActivity.notifyFlutter("serviceChanged")
@@ -96,9 +130,10 @@ class EwAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         try {
-            unregisterReceiver(screenOff)
+            unregisterReceiver(systemEvents)
         } catch (ignored: Exception) {
         }
+        mainHandler.removeCallbacksAndMessages(null)
         if (::screen.isInitialized) screen.dismiss()
         if (::bubble.isInitialized) bubble.hide()
         instance = null
@@ -114,10 +149,24 @@ class EwAccessibilityService : AccessibilityService() {
      * because in-memory counts may be ahead of writes still queued on Store.io.
      */
     fun reload(full: Boolean = false) {
-        settings = store.settings()
+        val fresh = try {
+            store.settings()
+        } catch (e: Exception) {
+            Log.w(TAG, "reload failed", e)
+            return
+        }
+        // "Allow 10 minutes" is written in the background; don't lose it to a reload that read first.
+        val memOverride = settings[Keys.FOCUS_OVERRIDE_UNTIL]?.toLongOrNull() ?: 0L
+        val dbOverride = fresh[Keys.FOCUS_OVERRIDE_UNTIL]?.toLongOrNull() ?: 0L
+        if (memOverride > dbOverride) fresh[Keys.FOCUS_OVERRIDE_UNTIL] = memOverride.toString()
+        settings = fresh
         detector.extraIds = Store.jsonList(settings[Keys.EXTRA_REEL_IDS]).toSet()
-        val today = store.today()
-        if (full || today != day) loadDay(today)
+        if (full || day.isEmpty()) {
+            loadDay(LogicalDay.keyFor(trustedNow(), resetHour()))
+        } else {
+            ensureToday(trustedNow())
+        }
+        scheduleFocusCheck()
         if (!on(Keys.MONITOR_ON) || !on(Keys.BUBBLE_ON)) {
             bubble.hide()
         } else if (isReelApp(foreground)) {
@@ -127,13 +176,21 @@ class EwAccessibilityService : AccessibilityService() {
     }
 
     private fun loadDay(today: String) {
+        val stored = try {
+            store.dailyCounts(today)
+        } catch (e: Exception) {
+            Log.w(TAG, "loadDay failed", e)
+            if (today == day) return // keep what we have rather than dropping to 0
+            emptyMap()
+        }
         day = today
         counts.clear()
         seconds.clear()
-        store.dailyCounts(today).forEach { (app, v) ->
+        stored.forEach { (app, v) ->
             counts[app] = v[0]
             seconds[app] = v[1]
         }
+        computeDayEnd()
         Store.runIo {
             store.pruneIfNeeded(today)
             store.rolloverTasks(LogicalDay.startOf(today, resetHour()))
@@ -162,11 +219,12 @@ class EwAccessibilityService : AccessibilityService() {
     }
 
     private fun onWindowChanged(pkg: String) {
+        if (pkg != foreground && pkg != SELF_PKG && pkg !in DetectionRules.APPS) refreshImePackage()
         if (pkg in DetectionRules.IGNORED_PACKAGES || pkg == imePackage || pkg == packageName) return
         val old = foreground
         if (pkg == old) return
         foreground = pkg
-        val now = System.currentTimeMillis()
+        val now = trustedNow()
 
         if (old != null && isReelApp(old)) {
             lastLeftAt[old] = now
@@ -205,11 +263,8 @@ class EwAccessibilityService : AccessibilityService() {
             showPause(pkg, pendingPauseTotalMs, pendingPauseLeftMs)
             return
         }
-        // F3: already over the hard limit with "block".
-        if (limitReached() && settings[Keys.LIMIT_ACTION] != "pause30") {
-            showLimitBlock()
-            return
-        }
+        // F3: over the limit, the block appears in the reel feed itself (see onReelScroll),
+        // so the rest of Instagram/YouTube (messages, normal videos) stays usable.
         // F9: smart interrupt when opening Instagram/YouTube.
         if (on(Keys.INTERRUPT_ON) && now - (lastLeftAt[pkg] ?: 0L) > DetectionRules.INTERRUPT_COOLDOWN_MS) {
             showInterrupt(pkg)
@@ -218,11 +273,21 @@ class EwAccessibilityService : AccessibilityService() {
 
     private fun onReelScroll(pkg: String, event: AccessibilityEvent) {
         if (!on(Keys.MONITOR_ON)) return
-        val now = System.currentTimeMillis()
         if (foreground != pkg) {
-            foreground = pkg
-            showBubble()
+            // A late scroll event can arrive just after you left; only count it as coming back
+            // if the reel app is really the active window.
+            val active = try {
+                rootInActiveWindow?.packageName?.toString()
+            } catch (e: Exception) {
+                null
+            }
+            if (active != pkg) return
+            // Back in the reel app without a window event (e.g. after a floating assistant or
+            // pop-up): run the same entry checks, so an escaped pause or a focus block comes back.
+            onWindowChanged(pkg)
+            if (foreground != pkg || screen.isShowing) return
         }
+        val now = trustedNow()
         ensureToday(now)
         val result = detector.onScroll(pkg, event, now)
         if (!result.inFeed) return
@@ -230,7 +295,7 @@ class EwAccessibilityService : AccessibilityService() {
 
         if (result.newReels <= 0) {
             // Inside the feed but no new reel: still enforce the block if over the limit.
-            if (limitReached() && settings[Keys.LIMIT_ACTION] != "pause30" && !screen.isShowing) showLimitBlock()
+            if (limitReached() && blockAtLimit() && !screen.isShowing) showLimitBlock()
             return
         }
 
@@ -259,7 +324,6 @@ class EwAccessibilityService : AccessibilityService() {
         decidePause(pkg, app, before, after)
     }
 
-    private val mainHandler = Handler(Looper.getMainLooper())
     private var widgetTrailingPosted = false
 
     /** Widget updates are throttled to one per 3 s; this makes sure the last count of a burst lands. */
@@ -276,11 +340,8 @@ class EwAccessibilityService : AccessibilityService() {
         if (screen.isShowing) return
         val total = total()
         if (on(Keys.LIMIT_ON) && total >= limit()) {
-            if (settings[Keys.LIMIT_ACTION] == "pause30") {
-                showPause(pkg, 30_000, 30_000)
-            } else {
-                showLimitBlock()
-            }
+            // Block switch on: reels are blocked. Off: a 30-second pause after every reel over the limit.
+            if (blockAtLimit()) showLimitBlock() else showPause(pkg, LIMIT_PAUSE_MS, LIMIT_PAUSE_MS)
             return
         }
         val key = if (app == "instagram") Keys.INTERVAL_INSTAGRAM else Keys.INTERVAL_YOUTUBE
@@ -294,13 +355,20 @@ class EwAccessibilityService : AccessibilityService() {
 
     // ------------------------------------------------------------------ overlays
 
-    private fun showPause(pkg: String, totalMs: Long, remainingMs: Long) {
-        pendingPausePkg = pkg
-        pendingPauseTotalMs = totalMs
-        pendingPauseLeftMs = remainingMs
+    /** [remember] = false for the Settings preview, so it never replaces or clears a real escaped pause. */
+    private fun showPause(pkg: String, totalMs: Long, remainingMs: Long, remember: Boolean = true) {
+        if (remember) {
+            pendingPausePkg = pkg
+            pendingPauseTotalMs = totalMs
+            pendingPauseLeftMs = remainingMs
+        }
         val total = total()
         val reelMinutes = seconds.values.sum() / 60
-        val top = store.topTask()
+        val top = try {
+            store.topTask()
+        } catch (e: Exception) {
+            null
+        }
         val lines = ArrayList<String>()
         lines.add("$total reels today, about ${formatMinutes(reelMinutes)} on reels")
         if (top != null) lines.add("Top task: $top")
@@ -313,9 +381,9 @@ class EwAccessibilityService : AccessibilityService() {
                 primary = "Continue",
                 secondary = "Close reels",
                 calm = true,
-                onPrimary = { clearPendingPause() },
+                onPrimary = { if (remember) clearPendingPause() },
                 onSecondary = {
-                    clearPendingPause()
+                    if (remember) clearPendingPause()
                     goHome()
                 },
             )
@@ -377,10 +445,10 @@ class EwAccessibilityService : AccessibilityService() {
                 secondary = "Close $label",
                 calm = false,
                 onPrimary = {
-                    val until = System.currentTimeMillis() + 10 * 60_000L
+                    val until = trustedNow() + 10 * 60_000L
                     settings = settings + (Keys.FOCUS_OVERRIDE_UNTIL to until.toString())
-                    // Written right away: a reload queued before an async write would drop the override.
-                    store.set(Keys.FOCUS_OVERRIDE_UNTIL, until.toString())
+                    Store.runIo { store.set(Keys.FOCUS_OVERRIDE_UNTIL, until.toString()) }
+                    scheduleFocusCheck()
                 },
                 onSecondary = { goHome() },
             )
@@ -414,6 +482,50 @@ class EwAccessibilityService : AccessibilityService() {
 
     private fun on(key: String) = settings[key] == "1"
 
+    /** Limit switch: "block" blocks the reel feeds; "pause30" gives a 30-second pause per reel instead. */
+    private fun blockAtLimit() = settings[Keys.LIMIT_ACTION] != "pause30"
+
+    private fun refreshImePackage() {
+        imePackage = try {
+            Settings.Secure.getString(contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)?.substringBefore('/')
+        } catch (e: Exception) {
+            imePackage
+        }
+    }
+
+    // ------------------------------------------------------------------ focus checks
+    // App switches catch most cases; this timer also catches: the focus window starting while you
+    // are already in a blocked app, "Allow 10 minutes" running out, and returning from a pop-up.
+
+    private val focusCheck = Runnable {
+        checkFocusNow()
+        scheduleFocusCheck()
+    }
+
+    private fun scheduleFocusCheck() {
+        mainHandler.removeCallbacks(focusCheck)
+        if (on(Keys.FOCUS_ON)) mainHandler.postDelayed(focusCheck, FOCUS_CHECK_MS)
+    }
+
+    private fun checkFocusNow() {
+        if (screen.isShowing) return
+        val pkg = try {
+            rootInActiveWindow?.packageName?.toString()
+        } catch (e: Exception) {
+            null
+        } ?: return
+        if (pkg == packageName || pkg == imePackage || pkg in DetectionRules.IGNORED_PACKAGES) return
+        if (pkg != foreground) {
+            onWindowChanged(pkg) // does the leave bookkeeping and shows the gate if needed
+            return
+        }
+        if (focusBlocks(pkg, trustedNow())) {
+            foreground = pkg
+            bubble.hide()
+            showFocusGate(pkg)
+        }
+    }
+
     private fun isReelApp(pkg: String?) = pkg != null && pkg in DetectionRules.APPS
 
     private fun total() = counts.values.sum()
@@ -424,12 +536,44 @@ class EwAccessibilityService : AccessibilityService() {
 
     private fun resetHour() = settings[Keys.DAY_RESET_HOUR]?.toIntOrNull() ?: 4
 
+    /**
+     * The day changes only when it has really ended on the uptime clock, so changing the time,
+     * date, time zone or "day starts at" hour can never start a new day early.
+     */
     private fun ensureToday(now: Long) {
-        val today = LogicalDay.keyFor(now, resetHour())
-        if (today != day) {
-            loadDay(today)
-            TodayWidget.updateAll(this)
+        if (day.isNotEmpty() && SystemClock.elapsedRealtime() < dayEndElapsed) return
+        // The day is over: a changed "day starts at" hour takes effect now.
+        val applied = try {
+            store.applyPendingResetHour(force = true)
+        } catch (e: Exception) {
+            false
         }
+        if (applied) {
+            try {
+                val fresh = store.settings()
+                fresh[Keys.FOCUS_OVERRIDE_UNTIL] = settings[Keys.FOCUS_OVERRIDE_UNTIL] ?: "0"
+                settings = fresh
+            } catch (e: Exception) {
+                Log.w(TAG, "settings reload failed", e)
+            }
+            MainActivity.notifyFlutter("settingsChanged")
+        }
+        val byClock = LogicalDay.keyFor(now, resetHour())
+        val rollover = day.isNotEmpty()
+        val next = if (rollover) maxOf(byClock, LogicalDay.minusDays(day, -1)) else byClock
+        loadDay(next)
+        // A day that starts by rolling over lasts at least 20 hours, so a time-zone change
+        // can't make the next day short (20 h still allows moving "day starts at" earlier).
+        if (rollover) dayEndElapsed = maxOf(dayEndElapsed, SystemClock.elapsedRealtime() + MIN_DAY_MS)
+        TodayWidget.updateAll(this)
+    }
+
+    /** When the current [day] ends, measured on the uptime clock. */
+    private fun computeDayEnd() {
+        val c = Calendar.getInstance()
+        c.timeInMillis = LogicalDay.startOf(day, resetHour())
+        c.add(Calendar.DAY_OF_MONTH, 1)
+        dayEndElapsed = SystemClock.elapsedRealtime() + (c.timeInMillis - trustedNow())
     }
 
     private fun flushWatchTime(now: Long, only: String? = null) {
@@ -513,13 +657,16 @@ class EwAccessibilityService : AccessibilityService() {
     /** Settings > "Preview pause": shows the real overlay over whatever is on screen. */
     fun previewPause() {
         val ms = (settings[Keys.PAUSE_SECONDS]?.toIntOrNull() ?: 5).coerceIn(3, 15) * 1000L
-        showPause(packageName, ms, ms)
-        pendingPausePkg = null
+        showPause(packageName, ms, ms, remember = false)
     }
 
     companion object {
         /** Stand-in package name for "the Ew Brother app itself is in front". */
         private const val SELF_PKG = "__ew_self__"
+        private const val TAG = "EwBrother"
+        private const val LIMIT_PAUSE_MS = 30_000L
+        private const val FOCUS_CHECK_MS = 15_000L
+        private const val MIN_DAY_MS = 20 * 3_600_000L
 
         @Volatile
         var instance: EwAccessibilityService? = null

@@ -74,8 +74,11 @@ class StatsViewModel extends ChangeNotifier {
   List<DayRecord> previous = const [];
   List<AppUsageEntry> topApps = const [];
 
-  /// First day the app has any data; days before it are not averaged.
+  /// First day the app tracked anything; earlier days are not averaged.
   String? firstDay;
+
+  /// First day with stored screen time (can be before install: Android keeps about a week).
+  String? firstUsageDay;
   bool loaded = false;
   bool busy = false;
 
@@ -102,10 +105,23 @@ class StatsViewModel extends ChangeNotifier {
   }
 
   Future<void> load() async {
+    if (!app.database.isOpen) return;
     final gen = ++_generation;
     busy = true;
     _notify();
+    try {
+      await _load(gen);
+    } catch (_) {
+      // Database closed mid-load (restore) or a query failed: keep the last data, stop the spinner.
+    } finally {
+      if (gen == _generation) {
+        busy = false;
+        _notify();
+      }
+    }
+  }
 
+  Future<void> _load(int gen) async {
     final reset = app.settings.dayResetHour;
     if (!_backfilled) {
       _backfilled = true;
@@ -117,16 +133,17 @@ class StatsViewModel extends ChangeNotifier {
     final recs = await history.range(days, reset);
     final prev = await history.range(prevDays, reset);
     final apps = await history.topApps(days, 6);
-    final first = await history.firstDay();
+    final first = await history.firstDay(reset);
+    final firstUsage = await history.firstUsageDay();
     if (gen != _generation || _disposed) return; // a newer load started
 
     records = recs;
     previous = prev;
     topApps = apps;
-    firstDay = first;
+    // Nothing tracked yet: today is the first day.
+    firstDay = first ?? today;
+    firstUsageDay = firstUsage ?? today;
     loaded = true;
-    busy = false;
-    _notify();
   }
 
   void setPreset(RangePreset p) {
@@ -168,11 +185,22 @@ class StatsViewModel extends ChangeNotifier {
         Metric.tasks => r.tasksDone,
       };
 
+  /// The first day that counts for the current metric.
+  String? get startDay => metric == Metric.screen ? firstUsageDay : firstDay;
+
   /// Days that count for averages: on or after the first tracked day, never after today.
-  List<DayRecord> _tracked(List<DayRecord> list) => [
-        for (final r in list)
-          if ((firstDay == null || r.date.compareTo(firstDay!) >= 0) && r.date.compareTo(today) <= 0) r,
-      ];
+  List<DayRecord> _tracked(List<DayRecord> list) {
+    final start = startDay;
+    return [
+      for (final r in list)
+        if ((start == null || r.date.compareTo(start) >= 0) && r.date.compareTo(today) <= 0) r,
+    ];
+  }
+
+  bool isTracked(DayRecord r) {
+    final start = startDay;
+    return start == null || r.date.compareTo(start) >= 0;
+  }
 
   int get total => records.fold(0, (s, r) => s + value(r));
   int get previousTotal => previous.fold(0, (s, r) => s + value(r));
@@ -183,10 +211,17 @@ class StatsViewModel extends ChangeNotifier {
     return (t.fold<int>(0, (s, r) => s + value(r)) / t.length).round();
   }
 
-  /// Percent change against the previous period, or null when there is nothing to compare.
+  /// Daily average now vs the previous period, in percent. Null when the previous period
+  /// wasn't mostly tracked (e.g. your first weeks), so it never shows a misleading +400%.
   int? get changePercent {
-    if (_tracked(previous).isEmpty || previousTotal == 0) return null;
-    return ((total - previousTotal) * 100 / previousTotal).round();
+    // Today is still running; leave it out so a half day doesn't look like an improvement.
+    final cur = _tracked(records).where((r) => r.date != today || records.length == 1).toList();
+    final prev = _tracked(previous);
+    if (cur.isEmpty || prev.length * 2 < previous.length) return null;
+    final curAvg = cur.fold<int>(0, (s, r) => s + value(r)) / cur.length;
+    final prevAvg = prev.fold<int>(0, (s, r) => s + value(r)) / prev.length;
+    if (prevAvg == 0) return null;
+    return ((curAvg - prevAvg) * 100 / prevAvg).round();
   }
 
   /// Best and worst tracked day (excluding today, which is still running).

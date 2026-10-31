@@ -24,6 +24,7 @@ class TasksViewModel extends ChangeNotifier {
   bool loaded = false;
   String _day = '';
   bool _disposed = false;
+  int _generation = 0;
 
   int get starred => open.where((t) => t.isTop3).length;
 
@@ -32,9 +33,17 @@ class TasksViewModel extends ChangeNotifier {
   }
 
   Future<void> load() async {
+    if (!app.database.isOpen) return;
+    final gen = ++_generation;
     _day = app.today;
-    await repo.rollover(app.dayStart);
-    final r = await repo.list(app.dayStart);
+    final ({List<Task> open, List<Task> doneToday}) r;
+    try {
+      await repo.rollover(app.dayStart);
+      r = await repo.list(app.dayStart);
+    } catch (_) {
+      return; // keep what's on screen; the next signal loads again
+    }
+    if (gen != _generation || _disposed) return; // a newer load is on its way
     open = r.open;
     doneToday = r.doneToday;
     loaded = true;

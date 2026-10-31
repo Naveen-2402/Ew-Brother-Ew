@@ -46,6 +46,7 @@ class TodayViewModel extends ChangeNotifier {
   String _loadedDay = '';
   DateTime _usageAt = DateTime.fromMillisecondsSinceEpoch(0);
   bool _disposed = false;
+  int _generation = 0;
 
   AppSettings get settings => app.settings;
   BrainMood get mood => moodFor(reelDay.total);
@@ -67,12 +68,25 @@ class TodayViewModel extends ChangeNotifier {
     }
   }
 
+  /// Reloads everything. Overlapping loads can finish out of order; only the newest is applied.
+  /// Errors (e.g. the database closed for a restore) keep the last good data on screen.
   Future<void> load() async {
+    if (!app.database.isOpen) return;
+    final gen = ++_generation;
+    try {
+      await _load(gen);
+    } catch (_) {
+      // The next signal (restore finished, resume, new data) loads again.
+    }
+  }
+
+  Future<void> _load(int gen) async {
     final today = app.today;
     await tasks.rollover(app.dayStart);
     final r = await reels.day(today);
     final t = await tasks.list(app.dayStart);
     final h = await habits.statuses(today);
+    if (gen != _generation || _disposed) return;
 
     final starredOpen = t.open.where((x) => x.isTop3).toList();
     final starredDone = t.doneToday.where((x) => x.isTop3).toList();
@@ -101,6 +115,7 @@ class TodayViewModel extends ChangeNotifier {
       await usage.refreshDay(today, settings.dayResetHour, until: now);
     }
     final totals = await usage.totals([today]);
+    if (gen != _generation || _disposed) return;
     screenSeconds = totals[today] ?? 0;
     _notify();
   }

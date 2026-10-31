@@ -3,6 +3,7 @@ package com.ewbrother.app.data
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import java.io.File
 
 /**
  * Owner of the SQLite schema (focuspal.db).
@@ -188,6 +189,58 @@ class EwDatabase private constructor(context: Context) :
             synchronized(lock) {
                 instance?.close()
                 instance = null
+            }
+        }
+
+        /** Triggers this app creates; a backup with any other trigger is refused. */
+        val KNOWN_TRIGGERS = setOf("trg_task_done", "trg_task_insert_done", "trg_task_rename")
+
+        val REQUIRED_TABLES = listOf(
+            "settings", "tasks", "habits", "habit_logs", "daily_stats", "app_usage", "reel_events",
+        )
+
+        /**
+         * Replace the database with [source] (an already validated backup).
+         * Holds the lock for the whole swap, so [get] waits instead of opening a half-copied file.
+         * The current file is kept aside and put back if the new one fails to open or migrate.
+         */
+        fun replaceWith(context: Context, source: File): Boolean {
+            val app = context.applicationContext
+            val dbFile = app.getDatabasePath(NAME)
+            val staged = File(dbFile.path + ".incoming")
+            val saved = File(dbFile.path + ".before-restore")
+            // The slow copy happens before taking the lock, so readers aren't blocked by it.
+            try {
+                source.copyTo(staged, overwrite = true)
+            } catch (e: Exception) {
+                staged.delete()
+                return false
+            }
+            return synchronized(lock) {
+                instance?.close() // closing the last connection folds the WAL into the main file
+                instance = null
+                saved.delete()
+                for (suffix in listOf("-wal", "-shm", "-journal")) File(dbFile.path + suffix).delete()
+                // Keep the current data aside (a rename, so it can't half-fail like a copy).
+                if (dbFile.exists() && !dbFile.renameTo(saved)) {
+                    staged.delete()
+                    return@synchronized false
+                }
+                var helper: EwDatabase? = null
+                try {
+                    if (!staged.renameTo(dbFile)) throw java.io.IOException("could not move the backup in place")
+                    helper = EwDatabase(app)
+                    helper.writableDatabase // opens and migrates an older backup
+                    instance = helper
+                    saved.delete()
+                    true
+                } catch (e: Exception) {
+                    helper?.close()
+                    SQLiteDatabase.deleteDatabase(dbFile)
+                    staged.delete()
+                    if (saved.exists()) saved.renameTo(dbFile) // put the old data back
+                    false
+                }
             }
         }
     }

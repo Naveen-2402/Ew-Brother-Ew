@@ -12,7 +12,6 @@ Future<void> main() async {
 
   final bridge = NativeBridge();
   final database = AppDatabase(bridge);
-  await database.open();
   final signal = DataSignal();
   final app = AppController(
     bridge: bridge,
@@ -20,7 +19,14 @@ Future<void> main() async {
     settingsRepo: SettingsRepository(database, bridge),
     signal: signal,
   );
-  await app.init();
+  try {
+    await database.open();
+    await app.init();
+  } catch (e) {
+    // Without the database nothing works; say so instead of hanging on a blank screen.
+    runApp(_StartupError(message: '$e'));
+    return;
+  }
 
   runApp(
     MultiProvider(
@@ -30,7 +36,7 @@ Future<void> main() async {
         Provider<NativeBridge>.value(value: bridge),
         Provider<AppDatabase>.value(value: database),
         Provider<ReelsRepository>(create: (_) => ReelsRepository(database)),
-        Provider<TasksRepository>(create: (_) => TasksRepository(database, bridge, signal)),
+        Provider<TasksRepository>(create: (_) => TasksRepository(database, bridge, signal, () => app.dayStart)),
         Provider<HabitsRepository>(create: (_) => HabitsRepository(database, bridge, signal)),
         Provider<UsageRepository>(create: (_) => UsageRepository(database, bridge)),
         Provider<HistoryRepository>(
@@ -45,4 +51,43 @@ Future<void> main() async {
       child: const EwApp(),
     ),
   );
+}
+
+class _StartupError extends StatelessWidget {
+  const _StartupError({required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      home: Scaffold(
+        backgroundColor: const Color(0xFF1C1524),
+        body: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Text(
+                  "Ew Brother Ew couldn't open its data.",
+                  style: TextStyle(color: Color(0xFFF2ECE3), fontSize: 22, fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  'Close the app from Recents and open it again. If this keeps happening, '
+                  'restart the phone. Reel counting may still be running in the background.',
+                  style: TextStyle(color: Color(0xFFA99DB5), fontSize: 15, height: 1.4),
+                ),
+                const SizedBox(height: 16),
+                Text(message, style: const TextStyle(color: Color(0xFF6E6379), fontSize: 12)),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }

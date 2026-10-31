@@ -37,7 +37,32 @@ class Store(context: Context) {
 
     fun resetHour(): Int = get(Keys.DAY_RESET_HOUR).toIntOrNull() ?: 4
 
-    fun today(now: Long = System.currentTimeMillis()): String = LogicalDay.keyFor(now, resetHour())
+    fun today(now: Long = System.currentTimeMillis()): String {
+        applyPendingResetHour(now)
+        return LogicalDay.keyFor(now, resetHour())
+    }
+
+    /**
+     * A new "day starts at" hour is stored as pending and only takes effect once the current
+     * logical day (under the old hour) has ended, so changing it can never start a new day early.
+     * Same rule as AppController._applyPendingResetHour in Dart. Returns true when applied now.
+     */
+    fun applyPendingResetHour(now: Long = System.currentTimeMillis(), force: Boolean = false): Boolean {
+        val next = get(Keys.DAY_RESET_NEXT).toIntOrNull() ?: return false
+        val after = get(Keys.DAY_RESET_NEXT_AFTER)
+        // [force]: the counter's day has ended on the uptime clock (the clock can't be trusted).
+        if (!force && LogicalDay.keyFor(now, resetHour()) <= after) return false
+        db.beginTransaction()
+        try {
+            set(Keys.DAY_RESET_HOUR, next.coerceIn(0, 23).toString())
+            set(Keys.DAY_RESET_NEXT, "")
+            set(Keys.DAY_RESET_NEXT_AFTER, "")
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        return true
+    }
 
     // ---------- reels ----------
 
@@ -172,9 +197,11 @@ class Store(context: Context) {
     }
 
     fun setHabitDone(id: Long, day: String, done: Boolean) {
+        // Only for habits that still exist (an old notification may point to a deleted one).
         db.execSQL(
-            "INSERT OR REPLACE INTO habit_logs(habit_id, date, done) VALUES (?, ?, ?)",
-            arrayOf<Any>(id, day, if (done) 1 else 0),
+            "INSERT OR REPLACE INTO habit_logs(habit_id, date, done) " +
+                "SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM habits WHERE id = ? AND is_active = 1)",
+            arrayOf<Any>(id, day, if (done) 1 else 0, id),
         )
     }
 
@@ -197,9 +224,9 @@ class Store(context: Context) {
     // ---------- backup ----------
 
     /** Flush WAL into the main file so a plain file copy is a complete backup. */
-    fun checkpoint() {
-        db.rawQuery("PRAGMA wal_checkpoint(TRUNCATE)", null).use { it.moveToFirst() }
-    }
+    /** true when everything was written into the main file (first result column 0 = not busy). */
+    fun checkpoint(): Boolean =
+        db.rawQuery("PRAGMA wal_checkpoint(TRUNCATE)", null).use { c -> c.moveToFirst() && c.getInt(0) == 0 }
 
     companion object {
         /** Single background thread for writes from the accessibility service. */

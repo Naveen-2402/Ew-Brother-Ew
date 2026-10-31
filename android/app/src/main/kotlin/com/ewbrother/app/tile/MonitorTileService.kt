@@ -18,6 +18,11 @@ class MonitorTileService : TileService() {
 
     override fun onClick() {
         super.onClick()
+        // From the lock screen, unlock first: someone holding the phone can't switch it off.
+        if (isLocked) unlockAndRun { toggle() } else toggle()
+    }
+
+    private fun toggle() {
         val store = Store(this)
         val on = store.get(Keys.MONITOR_ON) == "1"
         store.set(Keys.MONITOR_ON, if (on) "0" else "1")

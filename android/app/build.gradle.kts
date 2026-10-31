@@ -48,9 +48,24 @@ android {
                 if (keystorePropertiesFile.exists()) {
                     signingConfigs.getByName("release")
                 } else {
-                    // Fallback so a build without key.properties still works (not update-safe).
+                    // Only reached by debug-style tooling; real release tasks are stopped below.
                     signingConfigs.getByName("debug")
                 }
+        }
+    }
+}
+
+// A release APK signed with any other key can't update the installed app, and uninstalling
+// to get past that deletes all data. So a release build without the real key fails loudly.
+tasks.configureEach {
+    if (name in setOf("assembleRelease", "bundleRelease", "packageRelease", "packageReleaseBundle", "signReleaseBundle")) {
+        doFirst {
+            if (!keystorePropertiesFile.exists()) {
+                throw GradleException(
+                    "android/key.properties is missing. Release builds must be signed with the " +
+                        "Ew Brother release key (see BUILD_ON_EC2.md, step 7)."
+                )
+            }
         }
     }
 }

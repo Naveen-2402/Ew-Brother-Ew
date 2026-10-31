@@ -277,7 +277,9 @@ class _QuickAddBarState extends State<_QuickAddBar> {
                   textCapitalization: TextCapitalization.sentences,
                   textInputAction: TextInputAction.send,
                   onSubmitted: (_) => _add(),
+                  maxLength: maxTitleLength,
                   decoration: const InputDecoration(
+                    counterText: '',
                     hintText: 'Add a task',
                     filled: false,
                     border: InputBorder.none,

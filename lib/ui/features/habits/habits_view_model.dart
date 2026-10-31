@@ -24,6 +24,7 @@ class HabitsViewModel extends ChangeNotifier {
   bool loaded = false;
   String _day = '';
   bool _disposed = false;
+  int _generation = 0;
 
   int get doneToday => habits.where((h) => h.doneToday).length;
 
@@ -35,8 +36,17 @@ class HabitsViewModel extends ChangeNotifier {
   }
 
   Future<void> load() async {
+    if (!app.database.isOpen) return;
+    final gen = ++_generation;
     _day = app.today;
-    habits = await repo.statuses(app.today);
+    final List<HabitStatus> next;
+    try {
+      next = await repo.statuses(app.today);
+    } catch (_) {
+      return;
+    }
+    if (gen != _generation || _disposed) return;
+    habits = next;
     loaded = true;
     _notify();
   }

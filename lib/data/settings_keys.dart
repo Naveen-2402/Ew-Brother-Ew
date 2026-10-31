@@ -15,6 +15,8 @@ class SettingsKeys {
   static const limitReels = 'limit_reels';
   static const limitAction = 'limit_action';
   static const dayResetHour = 'day_reset_hour';
+  static const dayResetNext = 'day_reset_next';
+  static const dayResetNextAfter = 'day_reset_next_after';
   static const messages = 'pause_messages';
   static const interruptOn = 'interrupt_on';
   static const focusOn = 'focus_on';

@@ -23,6 +23,7 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
+import java.io.InputStream
 
 /**
  * Flutter <-> native bridge on channel "ew/native".
@@ -228,50 +229,56 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun exportTo(uri: Uri): String {
-        Store(this).checkpoint()
-        val dbFile = getDatabasePath(EwDatabase.NAME)
-        val out = contentResolver.openOutputStream(uri) ?: return "error: cannot write file"
-        out.use { o -> dbFile.inputStream().use { it.copyTo(o) } }
-        return "ok"
+        // On the IO thread: no reel write can land while the file is being copied.
+        return Store.callIo {
+            if (!Store(this).checkpoint()) return@callIo "error: the database is busy, try again in a moment"
+            val dbFile = getDatabasePath(EwDatabase.NAME)
+            val out = contentResolver.openOutputStream(uri) ?: return@callIo "error: cannot write file"
+            out.use { o -> dbFile.inputStream().use { it.copyTo(o) } }
+            "ok"
+        }
     }
 
     private fun importFrom(uri: Uri): String {
         val tmp = File(cacheDir, "import.db")
+        SQLiteDatabase.deleteDatabase(tmp) // also removes any -wal/-shm left from an earlier try
         val input = contentResolver.openInputStream(uri) ?: return "error: cannot read file"
-        input.use { i -> tmp.outputStream().use { i.copyTo(it) } }
-
-        // Must be an SQLite file with our tables.
-        val header = ByteArray(15)
-        tmp.inputStream().use { it.read(header) }
-        if (String(header, Charsets.US_ASCII) != "SQLite format 3") {
-            tmp.delete()
-            return "error: not an Ew Brother Ew backup"
-        }
-        val valid = try {
-            SQLiteDatabase.openDatabase(tmp.path, null, SQLiteDatabase.OPEN_READONLY).use { db ->
-                db.rawQuery(
-                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('settings', 'tasks', 'habits', 'daily_stats')",
-                    null,
-                ).use { c -> c.moveToFirst() && c.getInt(0) == 4 }
+        input.use { i ->
+            // Check the header before copying anything, and cap the size.
+            val header = ByteArray(16)
+            if (readFully(i, header) < 16 || String(header, 0, 15, Charsets.US_ASCII) != "SQLite format 3") {
+                return "error: $NOT_A_BACKUP"
             }
-        } catch (e: Exception) {
-            false
-        }
-        if (!valid) {
-            tmp.delete()
-            return "error: not an Ew Brother Ew backup"
+            tmp.outputStream().use { o ->
+                o.write(header)
+                val buf = ByteArray(64 * 1024)
+                var total = header.size.toLong()
+                while (true) {
+                    val n = i.read(buf)
+                    if (n < 0) break
+                    total += n
+                    if (total > MAX_BACKUP_BYTES) {
+                        o.close()
+                        SQLiteDatabase.deleteDatabase(tmp)
+                        return "error: the file is too big to be a backup"
+                    }
+                    o.write(buf, 0, n)
+                }
+            }
         }
 
-        val dbFile = getDatabasePath(EwDatabase.NAME)
-        // Swap on the single IO thread so no queued reel write lands half in the old file.
-        Store.callIo {
-            EwDatabase.closeInstance()
-            File(dbFile.path + "-wal").delete()
-            File(dbFile.path + "-shm").delete()
-            tmp.copyTo(dbFile, overwrite = true)
-            tmp.delete()
-            EwDatabase.get(this).writableDatabase // reopen + migrate older backups
+        val problem = validateBackup(tmp)
+        if (problem != null) {
+            SQLiteDatabase.deleteDatabase(tmp)
+            return "error: $problem"
         }
+
+        // Swap on the single IO thread so no queued reel write lands in the wrong file.
+        // replaceWith keeps the current data and puts it back if the new file won't open.
+        val swapped = Store.callIo { EwDatabase.replaceWith(this, tmp) }
+        SQLiteDatabase.deleteDatabase(tmp)
+        if (!swapped) return "error: the backup could not be opened. Your data was not changed."
+
         EwAccessibilityService.reloadFromAnyThread(full = true)
         Store.runIo {
             AlarmScheduler.scheduleAll(this)
@@ -280,11 +287,58 @@ class MainActivity : FlutterActivity() {
         return "ok"
     }
 
+    /** null when [file] is a healthy backup from this or an older app version, else the reason. */
+    private fun validateBackup(file: File): String? {
+        try {
+            SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READWRITE).use { db ->
+                val version = db.version
+                if (version < 1) return NOT_A_BACKUP
+                if (version > EwDatabase.VERSION) return "this backup is from a newer app version. Update the app first."
+                val check = db.rawQuery("PRAGMA quick_check", null).use { c ->
+                    if (c.moveToFirst()) c.getString(0) else ""
+                }
+                if (check != "ok") return "the backup file is damaged"
+
+                val tables = HashSet<String>()
+                var unexpected = false
+                db.rawQuery("SELECT type, name FROM sqlite_master", null).use { c ->
+                    while (c.moveToNext()) {
+                        val type = c.getString(0)
+                        val name = c.getString(1)
+                        when (type) {
+                            "table" -> tables.add(name)
+                            "trigger" -> if (name !in EwDatabase.KNOWN_TRIGGERS) unexpected = true
+                            "view" -> unexpected = true
+                        }
+                    }
+                }
+                if (!tables.containsAll(EwDatabase.REQUIRED_TABLES)) return NOT_A_BACKUP
+                // A backup we made never contains other triggers or views; refuse anything that does.
+                if (unexpected) return "the backup contains database code this app didn't create"
+            }
+        } catch (e: Exception) {
+            return NOT_A_BACKUP
+        }
+        return null
+    }
+
+    private fun readFully(input: InputStream, buf: ByteArray): Int {
+        var off = 0
+        while (off < buf.size) {
+            val n = input.read(buf, off, buf.size - off)
+            if (n < 0) break
+            off += n
+        }
+        return off
+    }
+
     companion object {
         private const val CHANNEL = "ew/native"
         private const val REQ_EXPORT = 41
         private const val REQ_IMPORT = 42
         private const val REQ_NOTIF = 7
+        private const val MAX_BACKUP_BYTES = 200L * 1024 * 1024
+        private const val NOT_A_BACKUP = "not an Ew Brother Ew backup"
 
         @Volatile
         private var channel: MethodChannel? = null

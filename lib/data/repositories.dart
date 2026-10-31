@@ -75,11 +75,14 @@ class ReelsRepository {
 // ============================================================================ tasks
 
 class TasksRepository {
-  TasksRepository(this._db, this._bridge, this._signal);
+  TasksRepository(this._db, this._bridge, this._signal, this._dayStart);
 
   final AppDatabase _db;
   final NativeBridge _bridge;
   final DataSignal _signal;
+
+  /// Start of the current logical day (from AppController).
+  final DateTime Function() _dayStart;
 
   static const maxTop = 3;
 
@@ -129,8 +132,12 @@ class TasksRepository {
     return makeTop == top;
   }
 
+  /// Starred tasks for today: open ones plus ones finished today, so the cap is 3 per day.
   Future<int> _topCount() async {
-    final r = await _db.db.rawQuery('SELECT COUNT(*) AS c FROM tasks WHERE is_top3 = 1 AND is_done = 0');
+    final r = await _db.db.rawQuery(
+      'SELECT COUNT(*) AS c FROM tasks WHERE is_top3 = 1 AND (is_done = 0 OR done_at >= ?)',
+      [_dayStart().millisecondsSinceEpoch],
+    );
     return r.first['c'] as int;
   }
 
@@ -161,6 +168,20 @@ class TasksRepository {
 
   Future<void> update(Task t) async {
     await _db.db.update('tasks', t.toRow(), where: 'id = ?', whereArgs: [t.id]);
+    await _changed();
+  }
+
+  /// Edit sheet: only the fields the sheet shows. Done state, order and star are left alone,
+  /// so a tick made meanwhile (e.g. from a notification) is never undone by saving.
+  Future<void> edit(int id, {required String title, required bool repeatDaily}) async {
+    final t = title.trim();
+    if (t.isEmpty) return;
+    await _db.db.update(
+      'tasks',
+      {'title': t, 'repeat_daily': repeatDaily ? 1 : 0},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
     await _changed();
   }
 
@@ -489,9 +510,28 @@ class HistoryRepository {
     return [for (final r in rows) r['title'] as String];
   }
 
-  /// Earliest day with any data, to bound the date picker.
-  Future<String?> firstDay() async {
-    final r = await _db.db.rawQuery('SELECT MIN(date) AS d FROM daily_stats');
+  /// First day the app actually tracked something (a reel, a habit tick or a finished task).
+  /// Screen-time backfill rows from before install don't count, so averages aren't diluted.
+  Future<String?> firstDay(int resetHour) async {
+    final r = await _db.db.rawQuery(
+      'SELECT MIN(d) AS d FROM ('
+      'SELECT MIN(date) AS d FROM daily_stats WHERE reel_count > 0 '
+      'UNION ALL SELECT MIN(date) FROM reel_events '
+      'UNION ALL SELECT MIN(date) FROM habit_logs WHERE done = 1)',
+    );
+    var first = r.first['d'] as String?;
+    final t = await _db.db.rawQuery('SELECT MIN(done_at) AS t FROM task_log');
+    final ms = t.first['t'] as int?;
+    if (ms != null) {
+      final k = LogicalDay.keyFor(DateTime.fromMillisecondsSinceEpoch(ms), resetHour);
+      if (first == null || k.compareTo(first) < 0) first = k;
+    }
+    return first;
+  }
+
+  /// First day with stored screen time (Android keeps about a week from before install).
+  Future<String?> firstUsageDay() async {
+    final r = await _db.db.rawQuery('SELECT MIN(date) AS d FROM app_usage');
     return r.first['d'] as String?;
   }
 }

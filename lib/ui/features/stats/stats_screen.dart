@@ -110,7 +110,7 @@ Color _metricColor(EwColors c, StatsViewModel vm) => switch (vm.metric) {
       Metric.tasks => c.warn,
     };
 
-bool _beforeTracking(StatsViewModel vm, DayRecord r) => vm.firstDay != null && r.date.compareTo(vm.firstDay!) < 0;
+bool _beforeTracking(StatsViewModel vm, DayRecord r) => !vm.isTracked(r);
 
 // ------------------------------------------------------------------ header and filters
 
@@ -354,12 +354,12 @@ class _Summary extends StatelessWidget {
 
     final Widget change;
     if (pct == null) {
-      change = const _Big(value: '–', label: 'no earlier data');
+      change = const _Big(value: '–', label: 'not enough earlier data');
     } else {
       final better = vm.metric.lowerIsBetter ? pct < 0 : pct > 0;
       final color = pct == 0 ? c.muted : (better ? c.good : c.bad);
       final arrow = pct > 0 ? '↑' : (pct < 0 ? '↓' : '');
-      change = _Big(value: '$arrow${pct.abs()}%', label: 'vs previous ${vm.records.length} days', color: color);
+      change = _Big(value: '$arrow${pct.abs()}%', label: 'a day, vs previous ${vm.records.length} days', color: color);
     }
 
     return Container(
@@ -410,22 +410,41 @@ class _Big extends StatelessWidget {
 
 // ------------------------------------------------------------------ chart
 
+/// One bar per day, or per week when the range is longer than ~3 months (so bars stay tappable).
 class _HistoryChart extends StatelessWidget {
   const _HistoryChart({required this.vm});
 
   final StatsViewModel vm;
 
+  /// Ranges longer than this are drawn as weekly bars.
+  static const _dailyLimit = 92;
+
   @override
   Widget build(BuildContext context) {
     final c = context.ew;
     final records = vm.records;
-    final n = records.length;
-    if (n == 0) return const SizedBox.shrink();
+    if (records.isEmpty) return const SizedBox.shrink();
+
+    // Buckets, oldest first. Weekly buckets are counted back from the newest day,
+    // so the last bar always ends on the last day of the range.
+    final weekly = records.length > _dailyLimit;
+    final buckets = <List<DayRecord>>[];
+    if (weekly) {
+      for (var end = records.length; end > 0; end -= 7) {
+        buckets.insert(0, records.sublist(math.max(0, end - 7), end));
+      }
+    } else {
+      for (final r in records) {
+        buckets.add([r]);
+      }
+    }
+    final n = buckets.length;
     final last = n - 1;
     final isScreen = vm.metric == Metric.screen;
-    double y(DayRecord r) => isScreen ? vm.value(r) / 3600 : vm.value(r).toDouble();
+    int sum(List<DayRecord> b) => b.fold(0, (s, r) => s + vm.value(r));
+    double y(List<DayRecord> b) => isScreen ? sum(b) / 3600 : sum(b).toDouble();
 
-    final maxV = records.fold<double>(0, (m, r) => math.max(m, y(r)));
+    final maxV = buckets.fold<double>(0, (m, b) => math.max(m, y(b)));
     final fallback = switch (vm.metric) {
       Metric.reels => 10.0,
       Metric.screen => 4.0,
@@ -436,6 +455,17 @@ class _HistoryChart extends StatelessWidget {
     final step = (n / 7).ceil();
     final stacked = vm.metric == Metric.reels && vm.appFilter == AppFilter.all;
     final color = _metricColor(c, vm);
+
+    String label(int i) {
+      final first = buckets[i].first.date;
+      if (!weekly && first == vm.today) return 'Today';
+      if (!weekly && n <= 7) return weekdayShort[LogicalDay.parse(first).weekday - 1];
+      return formatShortDate(first);
+    }
+
+    String tooltipTitle(List<DayRecord> b) => weekly
+        ? '${formatShortDate(b.first.date)} – ${formatShortDate(b.last.date)}'
+        : formatDayKey(b.first.date, vm.today);
 
     return LayoutBuilder(
       builder: (context, box) {
@@ -460,14 +490,13 @@ class _HistoryChart extends StatelessWidget {
                     getTitlesWidget: (value, meta) {
                       final i = value.toInt();
                       if (i < 0 || i >= n || (last - i) % step != 0) return const SizedBox.shrink();
-                      final d = records[i].date;
-                      final isToday = d == vm.today;
-                      final text = isToday
-                          ? 'Today'
-                          : (n <= 7 ? weekdayShort[LogicalDay.parse(d).weekday - 1] : formatShortDate(d));
+                      final current = buckets[i].any((r) => r.date == vm.today);
                       return SideTitleWidget(
                         meta: meta,
-                        child: Text(text, style: context.type.labelSmall?.copyWith(color: isToday ? c.text : c.muted)),
+                        child: Text(
+                          label(i),
+                          style: context.type.labelSmall?.copyWith(color: current ? c.text : c.muted),
+                        ),
                       );
                     },
                   ),
@@ -476,8 +505,9 @@ class _HistoryChart extends StatelessWidget {
               barTouchData: BarTouchData(
                 touchCallback: (event, response) {
                   final spot = response?.spot;
-                  if (event is FlTapUpEvent && spot != null) {
-                    showDaySheet(context, records[spot.touchedBarGroupIndex]);
+                  // Tapping a daily bar opens that day; weekly bars just show their tooltip.
+                  if (!weekly && event is FlTapUpEvent && spot != null) {
+                    showDaySheet(context, buckets[spot.touchedBarGroupIndex].first);
                   }
                 },
                 touchTooltipData: BarTouchTooltipData(
@@ -485,11 +515,11 @@ class _HistoryChart extends StatelessWidget {
                   fitInsideHorizontally: true,
                   fitInsideVertically: true,
                   getTooltipItem: (group, groupIndex, rod, rodIndex) {
-                    final r = records[groupIndex];
+                    final b = buckets[groupIndex];
                     return BarTooltipItem(
-                      '${formatDayKey(r.date, vm.today)}\n',
+                      '${tooltipTitle(b)}\n',
                       ewText(12, 520, color: c.muted),
-                      children: [TextSpan(text: _fmt(vm, vm.value(r)), style: ewText(15, 720, color: c.text))],
+                      children: [TextSpan(text: _fmt(vm, sum(b)), style: ewText(15, 720, color: c.text))],
                     );
                   },
                 ),
@@ -500,22 +530,22 @@ class _HistoryChart extends StatelessWidget {
                     x: i,
                     barRods: [
                       BarChartRodData(
-                        toY: y(records[i]),
+                        toY: y(buckets[i]),
                         width: barW,
-                        color: y(records[i]) == 0
+                        color: y(buckets[i]) == 0
                             ? c.surfaceHigh
                             : (i == last || stacked ? color : color.withValues(alpha: 0.72)),
                         borderRadius: BorderRadius.vertical(top: radius),
-                        rodStackItems: !stacked || y(records[i]) == 0
+                        rodStackItems: !stacked || y(buckets[i]) == 0
                             ? null
-                            : [
-                                BarChartRodStackItem(0, records[i].reels.instagram.toDouble(), c.insta),
-                                BarChartRodStackItem(
-                                  records[i].reels.instagram.toDouble(),
-                                  records[i].reels.total.toDouble(),
-                                  c.shorts,
-                                ),
-                              ],
+                            : () {
+                                final ig = buckets[i].fold<int>(0, (s, r) => s + r.reels.instagram).toDouble();
+                                final all = buckets[i].fold<int>(0, (s, r) => s + r.reels.total).toDouble();
+                                return [
+                                  BarChartRodStackItem(0, ig, c.insta),
+                                  BarChartRodStackItem(ig, all, c.shorts),
+                                ];
+                              }(),
                       ),
                     ],
                   ),

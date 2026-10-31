@@ -66,6 +66,17 @@ object Notifier {
     private fun action(ctx: Context, title: String, pi: PendingIntent): Notification.Action =
         Notification.Action.Builder(Icon.createWithResource(ctx, R.drawable.ic_notif), title, pi).build()
 
+    /** Pause/resume from the notification asks to unlock first when the phone is locked (Android 12+). */
+    private fun toggleAction(ctx: Context, on: Boolean): Notification.Action {
+        val b = Notification.Action.Builder(
+            Icon.createWithResource(ctx, R.drawable.ic_notif),
+            if (on) "Pause monitoring" else "Resume monitoring",
+            broadcast(ctx, ActionReceiver.ACTION_TOGGLE_MONITOR, 20),
+        )
+        if (Build.VERSION.SDK_INT >= 31) b.setAuthenticationRequired(true)
+        return b.build()
+    }
+
     private fun short(s: String, max: Int = 20) = if (s.length <= max) s else s.take(max - 1) + "…"
 
     private fun nm(ctx: Context) = ctx.getSystemService(NotificationManager::class.java)!!
@@ -92,13 +103,7 @@ object Notifier {
             .setOnlyAlertOnce(true)
             .setShowWhen(false)
             .setContentIntent(openApp(ctx))
-            .addAction(
-                action(
-                    ctx,
-                    if (on) "Pause monitoring" else "Resume monitoring",
-                    broadcast(ctx, ActionReceiver.ACTION_TOGGLE_MONITOR, 20),
-                )
-            )
+            .addAction(toggleAction(ctx, on))
             .build()
         nm(ctx).notify(ID_STATUS, n)
     }

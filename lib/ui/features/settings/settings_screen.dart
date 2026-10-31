@@ -131,21 +131,37 @@ class SettingsScreen extends StatelessWidget {
                   label: (v) => '$v reels',
                   onSaved: (v) => app.update({SettingsKeys.limitReels: '$v'}),
                 ),
-                ChoiceTile<LimitAction>(
-                  title: 'At the limit',
-                  value: s.limitAction,
-                  options: const {LimitAction.block: 'Block reels', LimitAction.pause30: '30-second pause'},
-                  onChanged: (v) => app.update({SettingsKeys.limitAction: v.name}),
+                SwitchListTile(
+                  value: s.limitAction == LimitAction.block,
+                  onChanged: (v) => app.update({
+                    SettingsKeys.limitAction: v ? LimitAction.block.name : LimitAction.pause30.name,
+                  }),
+                  title: const Text('Block reels at the limit'),
+                  subtitle: Text(
+                    s.limitAction == LimitAction.block
+                        ? 'The Reels and Shorts feeds are blocked. Messages and normal videos still work.'
+                        : 'Off: a 30-second pause after every reel over the limit.',
+                  ),
                 ),
               ],
               SliderTile(
                 title: 'New day starts at',
-                value: s.dayResetHour,
+                value: s.pendingResetHour ?? s.dayResetHour,
                 min: 0,
                 max: 23,
                 divisions: 23,
                 label: formatHour,
-                onSaved: (v) => app.update({SettingsKeys.dayResetHour: '$v'}),
+                onSaved: app.setResetHour,
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+                child: Text(
+                  s.pendingResetHour == null
+                      ? "Changes apply from the next day, so today's count can't be reset."
+                      : 'Today runs until ${formatHour(s.dayResetHour)}. '
+                          'From then, a new day starts at ${formatHour(s.pendingResetHour!)}.',
+                  style: context.type.bodySmall,
+                ),
               ),
             ],
           ),

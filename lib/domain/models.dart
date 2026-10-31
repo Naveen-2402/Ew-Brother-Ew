@@ -161,6 +161,15 @@ class AppSettings {
   LimitAction get limitAction =>
       _s(SettingsKeys.limitAction, 'block') == 'pause30' ? LimitAction.pause30 : LimitAction.block;
   int get dayResetHour => _i(SettingsKeys.dayResetHour, 4).clamp(0, 23);
+
+  /// A changed "day starts at" hour waiting for the current day to end, or null.
+  int? get pendingResetHour {
+    final v = int.tryParse(_raw[SettingsKeys.dayResetNext] ?? '');
+    return v?.clamp(0, 23);
+  }
+
+  /// The day key that has to end before [pendingResetHour] applies.
+  String get pendingResetAfter => _s(SettingsKeys.dayResetNextAfter, '');
   List<String> get messages => _list(SettingsKeys.messages);
   bool get interruptOn => _b(SettingsKeys.interruptOn, false);
   bool get focusOn => _b(SettingsKeys.focusOn, false);

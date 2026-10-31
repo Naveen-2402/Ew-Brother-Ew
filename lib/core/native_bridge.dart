@@ -44,7 +44,11 @@ class NativeBridge {
   /// "reelCounted", "dataChanged", "settingsChanged", "serviceChanged".
   Stream<String> get events => _events.stream;
 
-  Future<String> dbPath() async => (await _channel.invokeMethod<String>('dbPath'))!;
+  Future<String> dbPath() async {
+    final path = await _channel.invokeMethod<String>('dbPath');
+    if (path == null) throw StateError('The database path is not available');
+    return path;
+  }
 
   Future<PermissionState> permissions() async {
     try {
@@ -97,22 +101,41 @@ class NativeBridge {
   }
 
   Future<List<({String package, String label})>> launchableApps() async {
-    final list = await _channel.invokeListMethod<Map<Object?, Object?>>('launchableApps') ?? [];
-    return [
-      for (final m in list) (package: m['package'] as String, label: m['label'] as String),
-    ];
+    try {
+      final list = await _channel.invokeListMethod<Map<Object?, Object?>>('launchableApps') ?? [];
+      return [
+        for (final m in list) (package: m['package'] as String, label: m['label'] as String),
+      ];
+    } on PlatformException {
+      return [];
+    }
   }
 
-  Future<List<String>> detectionLog() async =>
-      await _channel.invokeListMethod<String>('detectionLog') ?? [];
+  Future<List<String>> detectionLog() async {
+    try {
+      return await _channel.invokeListMethod<String>('detectionLog') ?? [];
+    } on PlatformException {
+      return [];
+    }
+  }
 
   /// Returns false if the accessibility service is not running.
-  Future<bool> previewPause() async =>
-      await _channel.invokeMethod<bool>('previewPause') ?? false;
+  Future<bool> previewPause() async {
+    try {
+      return await _channel.invokeMethod<bool>('previewPause') ?? false;
+    } on PlatformException {
+      return false;
+    }
+  }
 
   /// "ok", "cancelled" or "error: ...".
-  Future<String> exportBackup(String fileName) async =>
-      await _channel.invokeMethod<String>('exportBackup', {'fileName': fileName}) ?? 'cancelled';
+  Future<String> exportBackup(String fileName) async {
+    try {
+      return await _channel.invokeMethod<String>('exportBackup', {'fileName': fileName}) ?? 'cancelled';
+    } on PlatformException catch (e) {
+      return 'error: ${e.message ?? e.code}';
+    }
+  }
 
   Future<String> importBackup() async =>
       await _channel.invokeMethod<String>('importBackup') ?? 'cancelled';

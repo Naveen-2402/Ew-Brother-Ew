@@ -82,8 +82,12 @@ class Bubble(
             PixelFormat.TRANSLUCENT,
         )
         p.gravity = Gravity.TOP or Gravity.START
-        p.x = if (savedX >= 0) savedX else metrics.widthPixels - size - OverlayStyle.dpi(ctx, 12f)
-        p.y = if (savedY >= 0) savedY else (metrics.heightPixels * 0.28f).toInt()
+        // Clamp a saved position to the current screen (rotation or a resolution change can
+        // otherwise leave the bubble off-screen where it can't be dragged back).
+        val maxX = (metrics.widthPixels - size).coerceAtLeast(0)
+        val maxY = (metrics.heightPixels - size).coerceAtLeast(0)
+        p.x = (if (savedX >= 0) savedX else metrics.widthPixels - size - OverlayStyle.dpi(ctx, 12f)).coerceIn(0, maxX)
+        p.y = (if (savedY >= 0) savedY else (metrics.heightPixels * 0.28f).toInt()).coerceIn(0, maxY)
 
         attachTouch(layout, p)
         try {
@@ -150,8 +154,9 @@ class Bubble(
                         handler.removeCallbacks(longPress)
                     }
                     if (dragging && root != null) {
-                        p.x = (startX + dx).toInt().coerceAtLeast(0)
-                        p.y = (startY + dy).toInt().coerceAtLeast(0)
+                        val m = ctx.resources.displayMetrics
+                        p.x = (startX + dx).toInt().coerceIn(0, (m.widthPixels - v.width).coerceAtLeast(0))
+                        p.y = (startY + dy).toInt().coerceIn(0, (m.heightPixels - v.height).coerceAtLeast(0))
                         try {
                             wm.updateViewLayout(v, p)
                         } catch (ignored: Exception) {

@@ -75,11 +75,20 @@ class ReelDetector(private val screenSize: () -> Pair<Int, Int>) {
 
         if (from >= 0 && to >= 0) {
             if (from != to) return Result(true, 0) // mid-swipe, two pages visible
-            if (from <= s.maxIndex) return Result(true, 0) // went back, or same reel
+            if (s.maxIndex > DetectionRules.MAX_JUMP && from <= 1) {
+                // Back at the very top after being far down: the feed reloaded (tab tapped again,
+                // refresh). Count from here, or the next reels would never count. Scrolling back
+                // by hand doesn't land on index 0/1 this way, so it isn't re-counted.
+                s.maxIndex = from
+                return Result(true, 0)
+            }
+            if (from <= s.maxIndex) return Result(true, 0) // went back a little, or same reel
             val jump = if (s.maxIndex < 0) 1 else from - s.maxIndex
             s.maxIndex = from
+            // A jump this large is the feed restoring a position, not swiping: new baseline, no count.
+            if (jump > DetectionRules.MAX_JUMP) return Result(true, 0)
             s.lastCountAt = now
-            return Result(true, if (jump > DetectionRules.MAX_JUMP) 1 else jump)
+            return Result(true, jump)
         }
 
         // Feed gives no indexes: one count per swipe.

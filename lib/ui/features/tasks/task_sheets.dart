@@ -34,16 +34,7 @@ Future<void> showTaskEditor(BuildContext context, Task task) {
       submitLabel: 'Save',
       initial: task,
       onSubmit: (title, repeat, top) async {
-        await repo.update(Task(
-          id: task.id,
-          title: title,
-          isDone: task.isDone,
-          isTop3: task.isTop3,
-          repeatDaily: repeat,
-          createdAt: task.createdAt,
-          doneAt: task.doneAt,
-          position: task.position,
-        ));
+        await repo.edit(task.id, title: title, repeatDaily: repeat);
         if (top != task.isTop3) {
           final ok = await repo.setTop(task.id, top);
           if (!ok && context.mounted) showSnack(context, 'Only 3 can be starred. Unstar one first.');
@@ -113,7 +104,8 @@ class _TaskFormState extends State<_TaskForm> {
             textCapitalization: TextCapitalization.sentences,
             textInputAction: TextInputAction.done,
             onSubmitted: (_) => _submit(),
-            decoration: const InputDecoration(hintText: 'What needs doing?'),
+            maxLength: maxTitleLength,
+            decoration: const InputDecoration(hintText: 'What needs doing?', counterText: ''),
           ),
           const SizedBox(height: 8),
           SwitchListTile(

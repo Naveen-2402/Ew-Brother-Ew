@@ -47,6 +47,9 @@ class EmptyState extends StatelessWidget {
   }
 }
 
+/// Longest task or habit name (keeps the widget and notifications readable).
+const maxTitleLength = 120;
+
 /// The haptic tick used when completing a task or habit.
 void tickHaptic() => HapticFeedback.lightImpact();
 
