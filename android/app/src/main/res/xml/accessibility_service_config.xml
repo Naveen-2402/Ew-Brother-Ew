@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Not scoped with packageNames: we must see when you LEAVE Instagram/YouTube
+     (to hide the bubble) and when you open focus-blocked apps. Events from other
+     apps are dropped in the first line of onAccessibilityEvent (cheap string compare).
+     notificationTimeout=100 coalesces scroll bursts to save battery. -->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeViewScrolled|typeWindowStateChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagReportViewIds"
+    android:canRetrieveWindowContent="true"
+    android:notificationTimeout="100"
+    android:description="@string/a11y_description" />

@@ -1,0 +1,119 @@
+package com.ewbrother.app.detect
+
+import android.graphics.Rect
+import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityNodeInfo
+
+/**
+ * Turns scroll events into "N new reels". Rules come from [DetectionRules].
+ *
+ * Counting model:
+ *  - Only scrolls inside a reel/short feed container count.
+ *  - When the feed reports item indexes, a reel counts when the feed SETTLES on an index
+ *    higher than any seen in this session. Scrolling back up never counts; quick swipes that
+ *    skip events are counted by the index jump (capped at MAX_JUMP).
+ *  - Without indexes, one count per swipe (debounced).
+ *  - Entering a feed never counts by itself (the spec counts scroll-to-next events).
+ */
+class ReelDetector(private val screenSize: () -> Pair<Int, Int>) {
+
+    data class Result(val inFeed: Boolean, val newReels: Int)
+
+    private class Session(
+        val containerKey: Int,
+        var maxIndex: Int,
+        var lastCountAt: Long,
+        var lastEventAt: Long,
+    )
+
+    private val sessions = HashMap<String, Session>()
+    private val heuristicCache = HashMap<Int, Boolean>()
+
+    /** View IDs added by the user in Settings > Detection check (no rebuild needed). */
+    @Volatile
+    var extraIds: Set<String> = emptySet()
+
+    /** Recent distinct scroll containers seen in Instagram/YouTube, newest first. */
+    val log: ArrayDeque<String> = ArrayDeque()
+
+    private val none = Result(false, 0)
+
+    fun reset(pkg: String) {
+        sessions.remove(pkg)
+    }
+
+    fun onScroll(pkg: String, event: AccessibilityEvent, now: Long): Result {
+        val source: AccessibilityNodeInfo = event.source ?: return none
+        val id: String? = source.viewIdResourceName
+
+        if (id != null && DetectionRules.EXCLUDED_ID_PARTS.any { id.contains(it) }) {
+            remember(pkg, id, event.className, false)
+            return none
+        }
+
+        val key = source.hashCode() * 31 + event.windowId
+        val idMatch = id != null &&
+            (DetectionRules.CONTAINER_IDS[pkg]?.contains(id) == true || extraIds.contains(id))
+        val matched = idMatch || (DetectionRules.HEURISTIC_ENABLED && looksLikeReelPager(key, source))
+        remember(pkg, id, event.className, matched)
+        if (!matched) return none
+
+        val from = event.fromIndex
+        val to = event.toIndex
+        var s = sessions[pkg]
+        if (s == null || s.containerKey != key || now - s.lastEventAt > DetectionRules.SESSION_GAP_MS) {
+            // New viewing session: set the baseline, don't count.
+            s = Session(key, if (from >= 0) from else -1, now, now)
+            sessions[pkg] = s
+            return Result(true, 0)
+        }
+        s.lastEventAt = now
+
+        if (from >= 0 && to >= 0) {
+            if (from != to) return Result(true, 0) // mid-swipe, two pages visible
+            if (from <= s.maxIndex) return Result(true, 0) // went back, or same reel
+            val jump = if (s.maxIndex < 0) 1 else from - s.maxIndex
+            s.maxIndex = from
+            s.lastCountAt = now
+            return Result(true, if (jump > DetectionRules.MAX_JUMP) 1 else jump)
+        }
+
+        // Feed gives no indexes: one count per swipe.
+        if (now - s.lastCountAt < DetectionRules.SWIPE_DEBOUNCE_MS) return Result(true, 0)
+        s.lastCountAt = now
+        return Result(true, 1)
+    }
+
+    /** Full-screen vertical pager: the container and its first page both fill the screen. */
+    private fun looksLikeReelPager(key: Int, node: AccessibilityNodeInfo): Boolean {
+        heuristicCache[key]?.let { return it }
+        val cls = node.className?.toString() ?: ""
+        var result = false
+        if (cls.contains("ViewPager") || cls.contains("RecyclerView")) {
+            val (w, h) = screenSize()
+            val r = Rect()
+            node.getBoundsInScreen(r)
+            if (r.height() >= h * DetectionRules.FULLSCREEN_RATIO && node.childCount > 0) {
+                val child = node.getChild(0)
+                if (child != null) {
+                    val cr = Rect()
+                    child.getBoundsInScreen(cr)
+                    result = cr.height() >= h * DetectionRules.FULLSCREEN_RATIO &&
+                        cr.width() >= w * 0.9f
+                }
+            }
+        }
+        if (heuristicCache.size > 64) heuristicCache.clear()
+        heuristicCache[key] = result
+        return result
+    }
+
+    private fun remember(pkg: String, id: String?, cls: CharSequence?, matched: Boolean) {
+        val app = DetectionRules.APPS[pkg] ?: pkg
+        val label = id ?: "(no id) ${cls ?: ""}"
+        val line = "$app|$label|${if (matched) 1 else 0}"
+        log.remove(line)
+        log.addFirst(line)
+        while (log.size > 25) log.removeLast()
+    }
+}

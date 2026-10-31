@@ -1,0 +1,5 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- INTERNET is needed for development only (hot reload, debugging).
+         The release APK has no INTERNET permission: the app is fully offline. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+</manifest>

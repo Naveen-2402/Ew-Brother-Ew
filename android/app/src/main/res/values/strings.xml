@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="a11y_description">Counts Instagram Reels and YouTube Shorts, shows a short pause every few reels, and blocks chosen apps during focus hours. It only looks at which screen is open and when you move to the next reel. Nothing leaves this phone.</string>
+    <string name="widget_description">Reels today, tasks left and habits done. Tap to tick.</string>
+</resources>

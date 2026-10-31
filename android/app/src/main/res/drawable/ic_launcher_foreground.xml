@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The "ew" mascot: one eye squeezed shut, one brow up, wavy grimace, tongue out.
+     Drawn inside the 66dp adaptive-icon safe zone. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#A6E38E"
+        android:pathData="M28,54a26,26 0,1 0,52 0a26,26 0,1 0,-52 0z" />
+    <path
+        android:fillColor="#F58BB0"
+        android:pathData="M56,66 Q56.5,75 61,75 Q65.5,75 65,66 Z" />
+    <path
+        android:strokeColor="#1C1524"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M37,43 L47,46.5 M39,49 L46,51.5 L39,54 M59,41 Q64.5,36.5 71,40 M42,66 Q46,62 50,66 T58,66 T66,66" />
+    <path
+        android:fillColor="#1C1524"
+        android:pathData="M61,51a3.5,3.5 0,1 0,7 0a3.5,3.5 0,1 0,-7 0z" />
+</vector>
