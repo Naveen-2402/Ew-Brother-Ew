@@ -135,6 +135,13 @@ class TasksRepository {
   }
 
   Future<void> setDone(int id, bool done) async {
+    if (!done) {
+      // Un-ticking: forget this completion in history (the trigger logged it on tick).
+      await _db.db.rawDelete(
+        'DELETE FROM task_log WHERE task_id = ? AND done_at = (SELECT done_at FROM tasks WHERE id = ?)',
+        [id, id],
+      );
+    }
     await _db.db.update(
       'tasks',
       {'is_done': done ? 1 : 0, 'done_at': done ? DateTime.now().millisecondsSinceEpoch : null},
@@ -363,5 +370,128 @@ class UsageRepository {
       [days.first, days.last],
     );
     return {for (final r in rows) r['date'] as String: (r['s'] as num).toInt()};
+  }
+}
+
+// ============================================================================ history
+
+/// Everything known about one past day.
+class DayRecord {
+  const DayRecord({
+    required this.date,
+    required this.reels,
+    required this.screenSeconds,
+    required this.habitsDone,
+    required this.habitsTotal,
+    required this.tasksDone,
+  });
+
+  final String date;
+  final ReelDay reels;
+  final int screenSeconds;
+  final int habitsDone;
+
+  /// Habits that existed on that day (still active ones only; deleted habits are gone).
+  final int habitsTotal;
+  final int tasksDone;
+}
+
+/// Read-only queries over any date range for the Stats/history screen.
+class HistoryRepository {
+  HistoryRepository(this._db, this._reels, this._usage, this._habits);
+
+  final AppDatabase _db;
+  final ReelsRepository _reels;
+  final UsageRepository _usage;
+  final HabitsRepository _habits;
+
+  /// [days] oldest first, consecutive.
+  Future<List<DayRecord>> range(List<String> days, int resetHour) async {
+    if (days.isEmpty) return const [];
+    final reels = await _reels.days(days);
+    final screen = await _usage.totals(days);
+    final habitsDone = await _habits.doneCounts(days);
+    final tasks = await _tasksDone(days, resetHour);
+    final created = (await _db.db.query('habits', columns: ['created_at'], where: 'is_active = 1'))
+        .map((r) => r['created_at'] as int)
+        .toList();
+    return [
+      for (final d in days)
+        DayRecord(
+          date: d,
+          reels: reels[d]!,
+          screenSeconds: screen[d] ?? 0,
+          habitsDone: habitsDone[d] ?? 0,
+          habitsTotal: () {
+            final end = LogicalDay.startOf(d, resetHour).add(const Duration(days: 1)).millisecondsSinceEpoch;
+            return created.where((c) => c < end).length;
+          }(),
+          tasksDone: tasks[d] ?? 0,
+        ),
+    ];
+  }
+
+  Future<Map<String, int>> _tasksDone(List<String> days, int resetHour) async {
+    final start = LogicalDay.startOf(days.first, resetHour).millisecondsSinceEpoch;
+    final end = LogicalDay.startOf(days.last, resetHour).add(const Duration(days: 1)).millisecondsSinceEpoch;
+    final rows = await _db.db.query(
+      'task_log',
+      columns: ['done_at'],
+      where: 'done_at >= ? AND done_at < ?',
+      whereArgs: [start, end],
+    );
+    final out = <String, int>{};
+    for (final r in rows) {
+      final key = LogicalDay.keyFor(DateTime.fromMillisecondsSinceEpoch(r['done_at'] as int), resetHour);
+      out[key] = (out[key] ?? 0) + 1;
+    }
+    return out;
+  }
+
+  /// Most used apps summed over the range.
+  Future<List<AppUsageEntry>> topApps(List<String> days, int limit) async {
+    if (days.isEmpty) return const [];
+    final rows = await _db.db.rawQuery(
+      'SELECT package_name, MAX(app_label) AS label, SUM(seconds) AS s FROM app_usage '
+      'WHERE date >= ? AND date <= ? GROUP BY package_name ORDER BY s DESC LIMIT ?',
+      [days.first, days.last, limit],
+    );
+    return [
+      for (final r in rows)
+        AppUsageEntry(
+          package: r['package_name'] as String,
+          label: r['label'] as String,
+          seconds: (r['s'] as num).toInt(),
+        ),
+    ];
+  }
+
+  /// Names of habits ticked on [day].
+  Future<List<String>> habitsOn(String day) async {
+    final rows = await _db.db.rawQuery(
+      'SELECT h.name FROM habit_logs l JOIN habits h ON h.id = l.habit_id '
+      'WHERE l.date = ? AND l.done = 1 ORDER BY h.position, h.id',
+      [day],
+    );
+    return [for (final r in rows) r['name'] as String];
+  }
+
+  /// Titles of tasks finished on [day].
+  Future<List<String>> tasksOn(String day, int resetHour) async {
+    final start = LogicalDay.startOf(day, resetHour);
+    final rows = await _db.db.query(
+      'task_log',
+      columns: ['title'],
+      where: 'done_at >= ? AND done_at < ?',
+      whereArgs: [start.millisecondsSinceEpoch, start.add(const Duration(days: 1)).millisecondsSinceEpoch],
+      orderBy: 'done_at ASC',
+    );
+    return [for (final r in rows) r['title'] as String];
+  }
+
+  /// Earliest day with any data, to bound the date picker.
+  Future<String?> firstDay() async {
+    final r = await _db.db.rawQuery('SELECT MIN(date) AS d FROM daily_stats');
+    return r.first['d'] as String?;
   }
 }

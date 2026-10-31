@@ -61,7 +61,11 @@ class ReelDetector(private val screenSize: () -> Pair<Int, Int>) {
         val from = event.fromIndex
         val to = event.toIndex
         var s = sessions[pkg]
-        if (s == null || s.containerKey != key || now - s.lastEventAt > DetectionRules.SESSION_GAP_MS) {
+        // A long reel (3+ min) sends no events while it plays. If the next event is exactly the
+        // next index in the same feed, it's the same session: count it instead of re-baselining.
+        val stale = s != null && now - s.lastEventAt > DetectionRules.SESSION_GAP_MS
+        val nextInSameFeed = s != null && from >= 0 && from == to && from == s.maxIndex + 1
+        if (s == null || s.containerKey != key || (stale && !nextInSameFeed)) {
             // New viewing session: set the baseline, don't count.
             s = Session(key, if (from >= 0) from else -1, now, now)
             sessions[pkg] = s

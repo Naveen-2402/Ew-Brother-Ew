@@ -33,6 +33,14 @@ Future<void> main() async {
         Provider<TasksRepository>(create: (_) => TasksRepository(database, bridge, signal)),
         Provider<HabitsRepository>(create: (_) => HabitsRepository(database, bridge, signal)),
         Provider<UsageRepository>(create: (_) => UsageRepository(database, bridge)),
+        Provider<HistoryRepository>(
+          create: (c) => HistoryRepository(
+            database,
+            c.read<ReelsRepository>(),
+            c.read<UsageRepository>(),
+            c.read<HabitsRepository>(),
+          ),
+        ),
       ],
       child: const EwApp(),
     ),

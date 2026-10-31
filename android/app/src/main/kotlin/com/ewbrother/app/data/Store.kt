@@ -141,7 +141,7 @@ class Store(context: Context) {
 
     fun tasksDoneBetween(start: Long, end: Long): Int =
         db.rawQuery(
-            "SELECT COUNT(*) FROM tasks WHERE done_at >= ? AND done_at < ?",
+            "SELECT COUNT(*) FROM task_log WHERE done_at >= ? AND done_at < ?",
             arrayOf(start.toString(), end.toString()),
         ).use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
 
@@ -215,6 +215,9 @@ class Store(context: Context) {
                 }
             }
         }
+
+        /** Run on the IO thread and wait for the result. Never call from the IO thread itself. */
+        fun <T> callIo(block: () -> T): T = io.submit(java.util.concurrent.Callable { block() }).get()
 
         fun jsonList(raw: String?): List<String> = try {
             val arr = JSONArray(raw ?: "[]")

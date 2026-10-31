@@ -56,7 +56,11 @@ class TasksScreen extends StatelessWidget {
                     ),
                     itemBuilder: (context, i) {
                       final t = vm.open[i];
-                      return _SwipeTask(key: ValueKey(t.id), task: t, vm: vm);
+                      return FadeSlideIn(
+                        key: ValueKey(t.id),
+                        index: i,
+                        child: _SwipeTask(task: t, vm: vm),
+                      );
                     },
                     footer: vm.doneToday.isEmpty
                         ? null
@@ -82,7 +86,7 @@ class TasksScreen extends StatelessWidget {
 }
 
 class _SwipeTask extends StatelessWidget {
-  const _SwipeTask({super.key, required this.task, required this.vm});
+  const _SwipeTask({required this.task, required this.vm});
 
   final Task task;
   final TasksViewModel vm;
@@ -255,48 +259,99 @@ class _QuickAddBarState extends State<_QuickAddBar> {
   Widget build(BuildContext context) {
     final c = context.ew;
     return Container(
-      color: c.bg,
-      padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
-      child: Row(
+      decoration: BoxDecoration(
+        color: c.bg,
+        border: Border(top: BorderSide(color: c.surfaceHigh)),
+      ),
+      padding: const EdgeInsets.fromLTRB(20, 2, 8, 8),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Expanded(
-            child: TextField(
-              controller: _text,
-              focusNode: _focus,
-              textCapitalization: TextCapitalization.sentences,
-              textInputAction: TextInputAction.send,
-              onSubmitted: (_) => _add(),
-              decoration: InputDecoration(
-                hintText: 'Add a task',
-                suffixIcon: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    IconButton(
-                      tooltip: 'Repeat daily',
-                      isSelected: _repeat,
-                      icon: Icon(Icons.repeat_rounded, color: _repeat ? c.good : c.muted),
-                      onPressed: () => setState(() => _repeat = !_repeat),
-                    ),
-                    IconButton(
-                      tooltip: 'Top 3',
-                      isSelected: _top,
-                      icon: Icon(_top ? Icons.star_rounded : Icons.star_outline_rounded, color: _top ? c.warn : c.muted),
-                      onPressed: () => setState(() => _top = !_top),
-                    ),
-                  ],
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _text,
+                  focusNode: _focus,
+                  style: context.type.bodyLarge,
+                  textCapitalization: TextCapitalization.sentences,
+                  textInputAction: TextInputAction.send,
+                  onSubmitted: (_) => _add(),
+                  decoration: const InputDecoration(
+                    hintText: 'Add a task',
+                    filled: false,
+                    border: InputBorder.none,
+                    enabledBorder: InputBorder.none,
+                    focusedBorder: InputBorder.none,
+                    contentPadding: EdgeInsets.symmetric(vertical: 14),
+                  ),
                 ),
               ),
-            ),
+              TextButton(onPressed: _add, child: const Text('Add')),
+            ],
           ),
-          const SizedBox(width: 8),
-          IconButton.filled(
-            tooltip: 'Add',
-            iconSize: 26,
-            constraints: const BoxConstraints(minWidth: 52, minHeight: 52),
-            onPressed: _add,
-            icon: const Icon(Icons.arrow_upward_rounded),
+          Row(
+            children: [
+              _Flag(
+                label: 'Repeat daily',
+                on: _repeat,
+                color: c.good,
+                onTap: () => setState(() => _repeat = !_repeat),
+              ),
+              const SizedBox(width: 8),
+              _Flag(
+                label: 'Top 3',
+                on: _top,
+                color: c.warn,
+                onTap: () => setState(() => _top = !_top),
+              ),
+            ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Small toggle for the quick-add bar. Outlined when off, tinted when on.
+class _Flag extends StatelessWidget {
+  const _Flag({required this.label, required this.on, required this.color, required this.onTap});
+
+  final String label;
+  final bool on;
+  final Color color;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.ew;
+    return Semantics(
+      button: true,
+      toggled: on,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(10),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          constraints: const BoxConstraints(minHeight: 40),
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: on ? color.withValues(alpha: 0.14) : Colors.transparent,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: on ? color.withValues(alpha: 0.6) : c.surfaceHigh, width: 1.5),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (on) ...[
+                Icon(Icons.check_rounded, size: 16, color: color),
+                const SizedBox(width: 4),
+              ],
+              Text(label, style: context.type.labelMedium?.copyWith(color: on ? color : c.muted)),
+            ],
+          ),
+        ),
       ),
     );
   }

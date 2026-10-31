@@ -31,3 +31,22 @@ const monthLong = [
   'January', 'February', 'March', 'April', 'May', 'June',
   'July', 'August', 'September', 'October', 'November', 'December',
 ];
+
+const monthShort = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/// "Today", "Yesterday", "Tue 21 Oct" (year added when not this year).
+String formatDayKey(String key, String today) {
+  final d = DateTime.parse(key);
+  final t = DateTime.parse(today);
+  final diff = DateTime(t.year, t.month, t.day).difference(DateTime(d.year, d.month, d.day)).inDays;
+  if (diff == 0) return 'Today';
+  if (diff == 1) return 'Yesterday';
+  final base = '${weekdayShort[d.weekday - 1]} ${d.day} ${monthShort[d.month - 1]}';
+  return d.year == t.year ? base : '$base ${d.year}';
+}
+
+/// "21 Oct" or "21 Oct 2025".
+String formatShortDate(String key, {bool withYear = false}) {
+  final d = DateTime.parse(key);
+  return withYear ? '${d.day} ${monthShort[d.month - 1]} ${d.year}' : '${d.day} ${monthShort[d.month - 1]}';
+}

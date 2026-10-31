@@ -82,9 +82,11 @@ class TodayViewModel extends ChangeNotifier {
       topDone = starredDone.length;
     } else {
       // Nothing starred: the first open tasks stand in for the top 3.
-      top = [...t.open.take(3), ...t.doneToday].take(3).toList();
+      // Finished tasks keep their slot so finishing work raises the score.
+      final done = t.doneToday.take(3).toList();
+      top = [...t.open.take(3 - done.length), ...done];
       topTotal = top.length;
-      topDone = top.where((x) => x.isDone).length;
+      topDone = done.length;
     }
     reelDay = r;
     habitList = h;

@@ -30,6 +30,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
 
   StreamSubscription<String>? _sub;
   Timer? _reelDebounce;
+  Timer? _dayTimer;
 
   DateTime get dayStart => LogicalDay.startOf(today, settings.dayResetHour);
 
@@ -39,6 +40,21 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     permissions = await bridge.permissions();
     WidgetsBinding.instance.addObserver(this);
     _sub = bridge.events.listen(_onNative);
+    _scheduleDayRollover();
+  }
+
+  /// Fires at the next reset hour so an app left open overnight moves to the new day.
+  void _scheduleDayRollover() {
+    _dayTimer?.cancel();
+    final s = LogicalDay.startOf(today, settings.dayResetHour);
+    // Calendar day + 1 (not +24 h), so clock changes don't make it fire early.
+    final next = DateTime(s.year, s.month, s.day + 1, settings.dayResetHour);
+    final wait = next.difference(DateTime.now()) + const Duration(seconds: 2);
+    _dayTimer = Timer(wait.isNegative ? const Duration(seconds: 2) : wait, () {
+      _checkDay();
+      if (database.isOpen) signal.bump();
+      _scheduleDayRollover();
+    });
   }
 
   void _onNative(String event) {
@@ -73,6 +89,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     final now = LogicalDay.keyFor(DateTime.now(), settings.dayResetHour);
     if (now != today) {
       today = now;
+      _scheduleDayRollover();
       notifyListeners();
     }
   }
@@ -111,6 +128,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _sub?.cancel();
     _reelDebounce?.cancel();
+    _dayTimer?.cancel();
     super.dispose();
   }
 }

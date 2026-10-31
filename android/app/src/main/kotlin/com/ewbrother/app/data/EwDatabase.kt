@@ -40,7 +40,7 @@ class EwDatabase private constructor(context: Context) :
         for (v in (from + 1)..to) {
             when (v) {
                 1 -> createV1(db)
-                // 2 -> { db.execSQL("ALTER TABLE ...") }
+                2 -> createV2TaskLog(db)
             }
         }
     }
@@ -121,6 +121,49 @@ class EwDatabase private constructor(context: Context) :
         insertDefaultSettings(db)
     }
 
+    /**
+     * v2: history of finished tasks. Repeat-daily tasks are reset every morning, so the tasks
+     * table alone forgets past completions. Triggers log every 0 -> 1 transition, whoever makes
+     * it (Flutter, notification action). Un-ticking today's task removes its log row in code.
+     */
+    private fun createV2TaskLog(db: SQLiteDatabase) {
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS task_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                done_at INTEGER NOT NULL,
+                UNIQUE (task_id, done_at))"""
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_task_log_done_at ON task_log(done_at)")
+        db.execSQL(
+            """CREATE TRIGGER IF NOT EXISTS trg_task_done AFTER UPDATE OF is_done ON tasks
+                WHEN NEW.is_done = 1 AND OLD.is_done = 0 AND NEW.done_at IS NOT NULL
+                BEGIN
+                    INSERT OR IGNORE INTO task_log(task_id, title, done_at) VALUES (NEW.id, NEW.title, NEW.done_at);
+                END"""
+        )
+        db.execSQL(
+            """CREATE TRIGGER IF NOT EXISTS trg_task_insert_done AFTER INSERT ON tasks
+                WHEN NEW.is_done = 1 AND NEW.done_at IS NOT NULL
+                BEGIN
+                    INSERT OR IGNORE INTO task_log(task_id, title, done_at) VALUES (NEW.id, NEW.title, NEW.done_at);
+                END"""
+        )
+        // Keep the title in history current when a task is renamed.
+        db.execSQL(
+            """CREATE TRIGGER IF NOT EXISTS trg_task_rename AFTER UPDATE OF title ON tasks
+                BEGIN
+                    UPDATE task_log SET title = NEW.title WHERE task_id = NEW.id;
+                END"""
+        )
+        // Tasks already done before this version.
+        db.execSQL(
+            "INSERT OR IGNORE INTO task_log(task_id, title, done_at) " +
+                "SELECT id, title, done_at FROM tasks WHERE is_done = 1 AND done_at IS NOT NULL"
+        )
+    }
+
     private fun insertDefaultSettings(db: SQLiteDatabase) {
         for ((k, v) in Keys.DEFAULTS) {
             db.execSQL("INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)", arrayOf(k, v))
@@ -129,7 +172,7 @@ class EwDatabase private constructor(context: Context) :
 
     companion object {
         const val NAME = "focuspal.db"
-        const val VERSION = 1
+        const val VERSION = 2
 
         @Volatile
         private var instance: EwDatabase? = null

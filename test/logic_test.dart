@@ -1,3 +1,4 @@
+import 'package:ew_brother_ew/core/format.dart';
 import 'package:ew_brother_ew/core/logical_day.dart';
 import 'package:ew_brother_ew/domain/score.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -46,6 +47,23 @@ void main() {
       expect(moodFor(50), BrainMood.meh);
       expect(moodFor(100), BrainMood.melting);
       expect(moodFor(200), BrainMood.fried);
+    });
+  });
+
+  group('history dates', () {
+    test('day labels', () {
+      expect(formatDayKey('2026-11-01', '2026-11-01'), 'Today');
+      expect(formatDayKey('2026-10-31', '2026-11-01'), 'Yesterday');
+      expect(formatDayKey('2026-10-27', '2026-11-01'), 'Tue 27 Oct');
+      expect(formatDayKey('2025-12-30', '2026-01-02'), 'Tue 30 Dec 2025');
+    });
+
+    test('previous period sits right before the range', () {
+      final range = LogicalDay.lastDays('2026-11-01', 7);
+      final prev = LogicalDay.lastDays(LogicalDay.minusDays(range.first, 1), range.length);
+      expect(prev.last, '2026-10-25');
+      expect(prev.first, '2026-10-19');
+      expect(prev.length, 7);
     });
   });
 }

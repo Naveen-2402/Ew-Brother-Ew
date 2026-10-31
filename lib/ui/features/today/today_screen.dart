@@ -11,7 +11,6 @@ import '../../core/theme.dart';
 import '../../core/widgets/brain_mood.dart';
 import '../../core/widgets/common.dart';
 import '../../core/widgets/mascot.dart';
-import '../../core/widgets/score_ring.dart';
 import '../habits/habit_editor.dart';
 import '../settings/permissions_screen.dart';
 import '../settings/settings_screen.dart';
@@ -48,6 +47,7 @@ class TodayScreen extends StatelessWidget {
                       style: context.type.titleSmall,
                     ),
                   ),
+                  _MonitorPill(vm: vm),
                   IconButton(
                     tooltip: 'Settings',
                     iconSize: 26,
@@ -61,9 +61,8 @@ class TodayScreen extends StatelessWidget {
               ),
             ),
             if (!perms) const _SetupBanner(),
-            _ReelBlock(vm: vm),
-            _MonitorSwitch(vm: vm),
-            _ScoreStrip(vm: vm),
+            FadeSlideIn(child: _ReelBlock(vm: vm)),
+            FadeSlideIn(index: 1, child: _Figures(vm: vm)),
             SectionTitle(
               'Top 3 today',
               trailing: TextButton(
@@ -74,7 +73,8 @@ class TodayScreen extends StatelessWidget {
             if (vm.loaded && vm.top.isEmpty)
               EmptyState(line: 'No tasks yet.', action: 'Add a task', onPressed: () => showQuickAddTask(context))
             else
-              for (final t in vm.top) _TaskRow(task: t, onTap: () => vm.toggleTask(t)),
+              for (final (i, t) in vm.top.indexed)
+                FadeSlideIn(key: ValueKey('top-${t.id}'), index: 2 + i, child: _TaskRow(task: t, onTap: () => vm.toggleTask(t))),
             SectionTitle(
               'Habits',
               trailing: TextButton(
@@ -147,7 +147,7 @@ class _ReelBlock extends StatelessWidget {
     final ratio = (total / s.softLimit).clamp(0.0, 1.0);
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -179,39 +179,64 @@ class _ReelBlock extends StatelessWidget {
               BrainMoodIcon(mood: vm.mood, size: 76),
             ],
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 18),
+          TweenAnimationBuilder<double>(
+            tween: Tween(end: ratio),
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeOutCubic,
+            builder: (_, v, _) => CustomPaint(
+              size: const Size(double.infinity, 18),
+              painter: _TickRulerPainter(value: v, fill: color, empty: c.surfaceHigh),
+            ),
+          ),
+          const SizedBox(height: 10),
           Row(
             children: [
               _AppCount(color: c.insta, label: 'Reels', value: vm.reelDay.instagram),
-              const SizedBox(width: 20),
+              const SizedBox(width: 18),
               _AppCount(color: c.shorts, label: 'Shorts', value: vm.reelDay.youtube),
               const Spacer(),
-              Text(formatDuration(vm.reelDay.seconds), style: context.type.labelMedium),
-            ],
-          ),
-          const SizedBox(height: 12),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(6),
-            child: TweenAnimationBuilder<double>(
-              tween: Tween(end: ratio),
-              duration: const Duration(milliseconds: 200),
-              builder: (_, v, _) => LinearProgressIndicator(
-                value: v,
-                minHeight: 10,
-                color: color,
-                backgroundColor: c.surfaceHigh,
+              Text(
+                s.limitOn ? 'limit ${s.limitReels}' : 'no limit',
+                style: context.type.labelMedium,
               ),
-            ),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            s.limitOn ? '$total of ${s.limitReels} for today' : 'No daily limit set',
-            style: context.type.bodySmall,
+            ],
           ),
         ],
       ),
     );
   }
+}
+
+/// Progress drawn as a row of ticks, like a ruler filling up. Every 5th tick is taller.
+class _TickRulerPainter extends CustomPainter {
+  _TickRulerPainter({required this.value, required this.fill, required this.empty});
+
+  final double value;
+  final Color fill;
+  final Color empty;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    const tick = 3.0;
+    const minGap = 4.0;
+    final count = ((size.width + minGap) / (tick + minGap)).floor().clamp(10, 80);
+    final gap = (size.width - count * tick) / (count - 1);
+    final lit = (value * count).round();
+    for (var i = 0; i < count; i++) {
+      final major = i % 5 == 4;
+      final h = major ? size.height : size.height * 0.62;
+      final x = i * (tick + gap);
+      final r = RRect.fromRectAndRadius(
+        Rect.fromLTWH(x, size.height - h, tick, h),
+        const Radius.circular(1.5),
+      );
+      canvas.drawRRect(r, Paint()..color = i < lit ? fill : empty);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_TickRulerPainter old) => old.value != value || old.fill != fill || old.empty != empty;
 }
 
 class _AppCount extends StatelessWidget {
@@ -226,17 +251,18 @@ class _AppCount extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Container(width: 10, height: 10, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+        Container(width: 8, height: 8, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
         const SizedBox(width: 6),
-        Text('$label ', style: context.type.bodyMedium?.copyWith(color: context.ew.muted)),
+        Text('$label ', style: context.type.labelMedium),
         Text('$value', style: context.type.labelLarge),
       ],
     );
   }
 }
 
-class _MonitorSwitch extends StatelessWidget {
-  const _MonitorSwitch({required this.vm});
+/// Small on/off pill in the header. Replaces the big monitoring card.
+class _MonitorPill extends StatelessWidget {
+  const _MonitorPill({required this.vm});
 
   final TodayViewModel vm;
 
@@ -244,38 +270,37 @@ class _MonitorSwitch extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = context.ew;
     final on = vm.settings.monitorOn;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 18, 16, 0),
-      child: Material(
-        color: c.surface,
-        borderRadius: BorderRadius.circular(22),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(22),
-          onTap: () => vm.setMonitor(!on),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(18, 12, 12, 12),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Monitoring', style: context.type.titleMedium),
-                      const SizedBox(height: 2),
-                      Text(
-                        on
-                            ? 'Pause every ${vm.settings.intervalInstagram} Reels, ${vm.settings.intervalYoutube} Shorts'
-                            : 'Off. Nothing is counted or paused.',
-                        style: context.type.bodySmall,
-                      ),
-                    ],
-                  ),
+    final tone = on ? c.good : c.warn;
+    return Semantics(
+      button: true,
+      toggled: on,
+      label: on ? 'Monitoring on. Tap to pause.' : 'Monitoring paused. Tap to resume.',
+      excludeSemantics: true,
+      child: SizedBox(
+        height: 48,
+        child: Center(
+          child: Material(
+            color: tone.withValues(alpha: 0.12),
+            shape: const StadiumBorder(),
+            child: InkWell(
+              customBorder: const StadiumBorder(),
+              onTap: () => vm.setMonitor(!on),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(10, 7, 12, 7),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    AnimatedContainer(
+                      duration: const Duration(milliseconds: 200),
+                      width: 8,
+                      height: 8,
+                      decoration: BoxDecoration(color: tone, shape: BoxShape.circle),
+                    ),
+                    const SizedBox(width: 7),
+                    Text(on ? 'Watching' : 'Paused', style: context.type.labelMedium?.copyWith(color: tone)),
+                  ],
                 ),
-                Transform.scale(
-                  scale: 1.15,
-                  child: Switch(value: on, onChanged: vm.setMonitor),
-                ),
-              ],
+              ),
             ),
           ),
         ),
@@ -284,48 +309,89 @@ class _MonitorSwitch extends StatelessWidget {
   }
 }
 
-class _ScoreStrip extends StatelessWidget {
-  const _ScoreStrip({required this.vm});
+/// Three figures in a ruled row, no card: score, screen time, what's left.
+class _Figures extends StatelessWidget {
+  const _Figures({required this.vm});
 
   final TodayViewModel vm;
 
   @override
   Widget build(BuildContext context) {
     final c = context.ew;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-      child: Container(
-        decoration: BoxDecoration(color: c.surface, borderRadius: BorderRadius.circular(22)),
-        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
-        child: IntrinsicHeight(
-          child: Row(
-            children: [
-              ScoreRing(score: vm.score, size: 56),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Daily score', style: context.type.titleMedium),
-                    Text('Habits, tasks, reels', style: context.type.bodySmall),
-                  ],
-                ),
-              ),
-              VerticalDivider(color: c.surfaceHigh, width: 24, thickness: 1.5),
-              Expanded(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(formatDuration(vm.screenSeconds), style: context.type.titleLarge),
-                    Text('Screen time today', style: context.type.bodySmall),
-                  ],
-                ),
-              ),
-            ],
+    final s = vm.settings;
+    final score = vm.score;
+    final scoreColor = score >= 70 ? c.good : (score >= 40 ? c.warn : c.bad);
+    final left = s.limitReels - vm.reelDay.total;
+    Widget rule() => Container(width: 1, height: 34, color: c.surfaceHigh);
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(20, 20, 20, 0),
+      padding: const EdgeInsets.symmetric(vertical: 14),
+      decoration: BoxDecoration(
+        border: Border.symmetric(horizontal: BorderSide(color: c.surfaceHigh)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: _Figure(
+              lead: true,
+              value: '$score',
+              unit: '/100',
+              label: 'day score',
+              color: scoreColor,
+            ),
           ),
-        ),
+          rule(),
+          Expanded(child: _Figure(value: formatDuration(vm.screenSeconds), label: 'screen time')),
+          rule(),
+          Expanded(
+            child: s.limitOn
+                ? _Figure(
+                    value: left > 0 ? '$left' : '0',
+                    label: left > 0 ? 'reels left' : 'limit hit',
+                    color: left > 0 ? null : c.bad,
+                  )
+                : _Figure(value: formatDuration(vm.reelDay.seconds), label: 'on reels'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _Figure extends StatelessWidget {
+  const _Figure({required this.value, required this.label, this.unit, this.color, this.lead = false});
+
+  /// First figure sits on the page margin; the others get room after the rule.
+  final bool lead;
+  final String value;
+  final String label;
+  final String? unit;
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.ew;
+    return Padding(
+      padding: EdgeInsets.only(left: lead ? 0 : 14, right: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text.rich(
+            TextSpan(
+              text: value,
+              style: ewText(24, 760, width: 82, color: color ?? c.text, height: 1.1),
+              children: [
+                if (unit != null) TextSpan(text: unit, style: ewText(12, 560, color: c.muted)),
+              ],
+            ),
+            maxLines: 1,
+            overflow: TextOverflow.fade,
+            softWrap: false,
+          ),
+          const SizedBox(height: 2),
+          Text(label, style: context.type.bodySmall, maxLines: 1),
+        ],
       ),
     );
   }
@@ -383,7 +449,7 @@ class _HabitChip extends StatelessWidget {
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        borderRadius: BorderRadius.circular(24),
+        borderRadius: BorderRadius.circular(14),
         onTap: onTap,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 200),
@@ -391,29 +457,26 @@ class _HabitChip extends StatelessWidget {
           constraints: const BoxConstraints(minHeight: 48),
           padding: const EdgeInsets.symmetric(horizontal: 16),
           decoration: BoxDecoration(
-            color: done ? c.good : c.surface,
-            borderRadius: BorderRadius.circular(24),
-            border: Border.all(color: done ? c.good : c.surfaceHigh, width: 1.5),
+            color: done ? c.good.withValues(alpha: 0.14) : Colors.transparent,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: done ? c.good.withValues(alpha: 0.55) : c.surfaceHigh, width: 1.5),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               Icon(
                 done ? Icons.check_rounded : habitIcon(status.habit.icon),
-                size: 20,
-                color: done ? c.onAccent : c.muted,
+                size: 19,
+                color: done ? c.good : c.muted,
               ),
               const SizedBox(width: 8),
               Text(
                 status.habit.name,
-                style: context.type.labelLarge?.copyWith(color: done ? c.onAccent : c.text),
+                style: context.type.labelLarge?.copyWith(color: done ? c.muted : c.text),
               ),
               if (status.streak > 1) ...[
-                const SizedBox(width: 6),
-                Text(
-                  '${status.streak}d',
-                  style: context.type.labelMedium?.copyWith(color: done ? c.onAccent : c.warn),
-                ),
+                const SizedBox(width: 8),
+                Text('${status.streak}', style: ewText(15, 760, width: 80, color: c.warn)),
               ],
             ],
           ),

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../../../core/format.dart';
@@ -317,8 +318,15 @@ class SettingsScreen extends StatelessWidget {
     );
     if (ok != true) return;
     await db.close();
-    final result = await app.bridge.importBackup();
-    await app.reopenAfterImport();
+    String result;
+    try {
+      result = await app.bridge.importBackup();
+    } on PlatformException catch (e) {
+      result = 'error: ${e.message ?? e.code}';
+    } finally {
+      // Always reopen, even if the picker failed, or every screen would hit a closed database.
+      await app.reopenAfterImport();
+    }
     if (!context.mounted) return;
     if (result == 'ok') {
       showSnack(context, 'Restored. Welcome back.');

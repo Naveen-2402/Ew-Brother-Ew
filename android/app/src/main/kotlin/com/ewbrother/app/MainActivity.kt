@@ -56,8 +56,18 @@ class MainActivity : FlutterActivity() {
             "openAccessibility" -> result.success(open(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)))
             "openUsageAccess" -> result.success(open(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)))
             "requestNotifications" -> {
-                if (Build.VERSION.SDK_INT >= 33) {
-                    requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 7)
+                if (Build.VERSION.SDK_INT >= 33 && !Notifier.canPost(this)) {
+                    val prefs = getSharedPreferences("perm", MODE_PRIVATE)
+                    val asked = prefs.getBoolean("notif_asked", false)
+                    if (asked && !shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS)) {
+                        // Denied twice: Android no longer shows the dialog, so open the app's notification settings.
+                        val settings = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                            .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+                        if (!open(settings)) open(appDetails())
+                    } else {
+                        prefs.edit().putBoolean("notif_asked", true).apply()
+                        requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQ_NOTIF)
+                    }
                 }
                 result.success(true)
             }
@@ -190,6 +200,12 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        // Flutter refreshes the permission list on this event.
+        if (requestCode == REQ_NOTIF) notifyFlutter("serviceChanged")
+    }
+
     @Suppress("DEPRECATION")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
@@ -247,12 +263,15 @@ class MainActivity : FlutterActivity() {
         }
 
         val dbFile = getDatabasePath(EwDatabase.NAME)
-        EwDatabase.closeInstance()
-        File(dbFile.path + "-wal").delete()
-        File(dbFile.path + "-shm").delete()
-        tmp.copyTo(dbFile, overwrite = true)
-        tmp.delete()
-        EwDatabase.get(this).writableDatabase // reopen + migrate older backups
+        // Swap on the single IO thread so no queued reel write lands half in the old file.
+        Store.callIo {
+            EwDatabase.closeInstance()
+            File(dbFile.path + "-wal").delete()
+            File(dbFile.path + "-shm").delete()
+            tmp.copyTo(dbFile, overwrite = true)
+            tmp.delete()
+            EwDatabase.get(this).writableDatabase // reopen + migrate older backups
+        }
         EwAccessibilityService.reloadFromAnyThread(full = true)
         Store.runIo {
             AlarmScheduler.scheduleAll(this)
@@ -265,6 +284,7 @@ class MainActivity : FlutterActivity() {
         private const val CHANNEL = "ew/native"
         private const val REQ_EXPORT = 41
         private const val REQ_IMPORT = 42
+        private const val REQ_NOTIF = 7
 
         @Volatile
         private var channel: MethodChannel? = null

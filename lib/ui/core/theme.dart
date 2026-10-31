@@ -1,4 +1,3 @@
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -179,7 +178,10 @@ ThemeData buildTheme(Brightness brightness) {
     fontFamily: _family,
     textTheme: text,
     extensions: [c],
-    splashFactory: InkSparkle.splashFactory,
+    splashFactory: InkRipple.splashFactory,
+    pageTransitionsTheme: const PageTransitionsTheme(
+      builders: {TargetPlatform.android: FadeForwardsPageTransitionsBuilder()},
+    ),
     appBarTheme: AppBarTheme(
       backgroundColor: c.bg,
       surfaceTintColor: Colors.transparent,

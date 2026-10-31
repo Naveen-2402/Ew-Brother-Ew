@@ -63,20 +63,120 @@ class _Shell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tab = context.watch<TabIndex>();
-    return Scaffold(
-      body: IndexedStack(
-        index: tab.value,
-        children: const [TodayScreen(), TasksScreen(), HabitsScreen(), StatsScreen()],
+    const pages = [TodayScreen(), TasksScreen(), HabitsScreen(), StatsScreen()];
+    // Back on any other tab returns to Today instead of leaving the app.
+    return PopScope(
+      canPop: tab.value == 0,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) tab.value = 0;
+      },
+      child: Scaffold(
+        body: Stack(
+          fit: StackFit.expand,
+          children: [
+            for (var i = 0; i < pages.length; i++) _TabPage(active: i == tab.value, child: pages[i]),
+          ],
+        ),
+        bottomNavigationBar: _NavBar(index: tab.value, onSelect: (i) => tab.value = i),
       ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: tab.value,
-        onDestinationSelected: (i) => tab.value = i,
-        destinations: const [
-          NavigationDestination(icon: Icon(Icons.today_outlined), selectedIcon: Icon(Icons.today_rounded), label: 'Today'),
-          NavigationDestination(icon: Icon(Icons.check_circle_outline_rounded), selectedIcon: Icon(Icons.check_circle_rounded), label: 'Tasks'),
-          NavigationDestination(icon: Icon(Icons.local_fire_department_outlined), selectedIcon: Icon(Icons.local_fire_department_rounded), label: 'Habits'),
-          NavigationDestination(icon: Icon(Icons.insights_outlined), selectedIcon: Icon(Icons.insights_rounded), label: 'Stats'),
-        ],
+    );
+  }
+}
+
+/// Text-only tab bar: the word is the button. Selected tab gets full ink and a short pista bar.
+class _NavBar extends StatelessWidget {
+  const _NavBar({required this.index, required this.onSelect});
+
+  final int index;
+  final ValueChanged<int> onSelect;
+
+  static const _labels = ['Today', 'Tasks', 'Habits', 'Stats'];
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.ew;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: c.bg,
+        border: Border(top: BorderSide(color: c.surfaceHigh)),
+      ),
+      child: SafeArea(
+        top: false,
+        child: SizedBox(
+          height: 60,
+          child: Row(
+            children: [
+              for (var i = 0; i < _labels.length; i++)
+                Expanded(
+                  child: Semantics(
+                    button: true,
+                    selected: i == index,
+                    child: InkWell(
+                      onTap: () => onSelect(i),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          AnimatedDefaultTextStyle(
+                            duration: const Duration(milliseconds: 180),
+                            style: ewText(
+                              15,
+                              i == index ? 720 : 520,
+                              color: i == index ? c.text : c.muted,
+                            ),
+                            child: Text(_labels[i]),
+                          ),
+                          const SizedBox(height: 6),
+                          AnimatedContainer(
+                            duration: const Duration(milliseconds: 180),
+                            curve: Curves.easeOut,
+                            width: i == index ? 18 : 0,
+                            height: 3,
+                            decoration: BoxDecoration(
+                              color: c.good,
+                              borderRadius: BorderRadius.circular(2),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Keeps every tab alive (like IndexedStack) but fades and lifts the active one in.
+/// Inactive tabs don't paint, don't take touches, don't tick and are hidden from TalkBack.
+class _TabPage extends StatelessWidget {
+  const _TabPage({required this.active, required this.child});
+
+  final bool active;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      ignoring: !active,
+      child: ExcludeSemantics(
+        excluding: !active,
+        child: TickerMode(
+          enabled: active,
+          child: AnimatedOpacity(
+            opacity: active ? 1 : 0,
+            duration: Duration(milliseconds: active ? 220 : 120),
+            curve: Curves.easeOut,
+            child: AnimatedSlide(
+              offset: active ? Offset.zero : const Offset(0, 0.015),
+              duration: const Duration(milliseconds: 220),
+              curve: Curves.easeOutCubic,
+              child: child,
+            ),
+          ),
+        ),
       ),
     );
   }

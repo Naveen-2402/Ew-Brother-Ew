@@ -146,7 +146,14 @@ class EwAccessibilityService : AccessibilityService() {
         if (event == null) return
         val pkg = event.packageName?.toString() ?: return
         when (event.eventType) {
-            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> onWindowChanged(pkg)
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
+                // Our own overlays are ignored, but opening the Ew Brother app itself is a real app switch.
+                if (pkg == packageName && event.className?.toString() == MainActivity::class.java.name) {
+                    onWindowChanged(SELF_PKG)
+                } else {
+                    onWindowChanged(pkg)
+                }
+            }
             AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
                 if (pkg !in DetectionRules.APPS) return // cheap early exit for all other apps
                 onReelScroll(pkg, event)
@@ -172,6 +179,8 @@ class EwAccessibilityService : AccessibilityService() {
             }
             if (screen.isShowing) screen.dismiss()
         }
+        // A focus gate belongs to the app it was shown over; drop it when that app is left.
+        if (old != null && !isReelApp(old) && screen.isShowing) screen.dismiss()
         if (bubbleHiddenFor != null && bubbleHiddenFor != pkg) bubbleHiddenFor = null
 
         // F10 focus mode applies to any chosen app, even when the reel monitor is off.
@@ -236,14 +245,31 @@ class EwAccessibilityService : AccessibilityService() {
         seconds[app] = (seconds[app] ?: 0) + watched
 
         val today = day
-        Store.runIo { store.recordReels(app, result.newReels, now, today, watched) }
+        Store.runIo {
+            store.recordReels(app, result.newReels, now, today, watched)
+            // After the write, so the widget reads the new count.
+            TodayWidget.updateAll(this, throttled = true)
+        }
+        scheduleWidgetTrailing()
 
         updateBubble()
-        TodayWidget.updateAll(this, throttled = true)
         MainActivity.notifyFlutter("reelCounted")
         if (on(Keys.STATUS_NOTIF_ON)) Notifier.refreshStatus(this, total())
 
         decidePause(pkg, app, before, after)
+    }
+
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var widgetTrailingPosted = false
+
+    /** Widget updates are throttled to one per 3 s; this makes sure the last count of a burst lands. */
+    private fun scheduleWidgetTrailing() {
+        if (widgetTrailingPosted) return
+        widgetTrailingPosted = true
+        mainHandler.postDelayed({
+            widgetTrailingPosted = false
+            Store.runIo { TodayWidget.updateAll(this) }
+        }, 3100)
     }
 
     private fun decidePause(pkg: String, app: String, before: Int, after: Int) {
@@ -353,7 +379,8 @@ class EwAccessibilityService : AccessibilityService() {
                 onPrimary = {
                     val until = System.currentTimeMillis() + 10 * 60_000L
                     settings = settings + (Keys.FOCUS_OVERRIDE_UNTIL to until.toString())
-                    Store.runIo { store.set(Keys.FOCUS_OVERRIDE_UNTIL, until.toString()) }
+                    // Written right away: a reload queued before an async write would drop the override.
+                    store.set(Keys.FOCUS_OVERRIDE_UNTIL, until.toString())
                 },
                 onSecondary = { goHome() },
             )
@@ -491,6 +518,9 @@ class EwAccessibilityService : AccessibilityService() {
     }
 
     companion object {
+        /** Stand-in package name for "the Ew Brother app itself is in front". */
+        private const val SELF_PKG = "__ew_self__"
+
         @Volatile
         var instance: EwAccessibilityService? = null
             private set

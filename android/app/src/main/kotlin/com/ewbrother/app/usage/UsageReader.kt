@@ -1,5 +1,6 @@
 package com.ewbrother.app.usage
 
+import android.Manifest
 import android.app.AppOpsManager
 import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
@@ -20,7 +21,10 @@ object UsageReader {
             @Suppress("DEPRECATION")
             ops.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), ctx.packageName)
         }
-        return mode == AppOpsManager.MODE_ALLOWED
+        // Some ROMs report MODE_DEFAULT and keep the grant in the permission instead.
+        return mode == AppOpsManager.MODE_ALLOWED ||
+            (mode == AppOpsManager.MODE_DEFAULT &&
+                ctx.checkSelfPermission(Manifest.permission.PACKAGE_USAGE_STATS) == PackageManager.PERMISSION_GRANTED)
     }
 
     /** List of maps {package, label, seconds} sorted by time, launcher and this app excluded. */
