@@ -70,6 +70,16 @@ class NativeBridge {
   Future<void> requestNotifications() => _call('requestNotifications');
   Future<void> openNotificationSettings() => _call('openNotificationSettings');
 
+  /// Phone maker group: "xiaomi", "samsung", "oppo" (also Realme/OnePlus), "vivo",
+  /// "huawei" (also Honor) or "other" (stock Android: Pixel, Motorola, Nokia, ...).
+  Future<String> deviceFamily() async {
+    try {
+      return await _channel.invokeMethod<String>('deviceFamily') ?? 'other';
+    } on PlatformException {
+      return 'other';
+    }
+  }
+
   /// [unrestricted]: ask for "No restrictions". false: open the page to pick "Battery saver".
   Future<void> openBattery({bool unrestricted = true}) =>
       _call('openBattery', {'mode': unrestricted ? 'unrestricted' : 'saver'});

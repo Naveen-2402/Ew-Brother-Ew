@@ -40,6 +40,25 @@ object DetectionRules {
     )
 
     /**
+     * Pagers that are CHECKED ON A TIMER instead of waiting for scroll events.
+     * YouTube sends a scroll event when Shorts opens but usually none for the swipes after it,
+     * so for YouTube the service looks at which Short fills this pager every [PAGER_POLL_MS]
+     * and counts when it changes. (Instagram sends scroll events, so it isn't polled.)
+     */
+    val POLL_PAGER_IDS: Map<String, List<String>> = mapOf(
+        YOUTUBE to listOf("com.google.android.youtube:id/reel_recycler"),
+    )
+
+    /** How often the YouTube Shorts pager is checked while YouTube is in front and the screen is on. */
+    const val PAGER_POLL_MS = 700L
+
+    /** While the pager was seen this recently, scroll events from that app don't count (no double count). */
+    const val POLL_ACTIVE_MS = 2_500L
+
+    /** A page counts as "on screen" when it fills this much of the pager's height. */
+    const val PAGE_VISIBLE_RATIO = 0.6f
+
+    /**
      * Never count these, even if the heuristic matches. In Instagram, "reel_viewer"
      * is the STORIES viewer (Instagram calls stories "reels" internally; Reels are "clips").
      */

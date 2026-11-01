@@ -180,15 +180,15 @@ df -h ~
 
 ---
 
-## 11. Install and set up on the Xiaomi phone
+## 11. Install and set up on the phone (any Android 8+)
 
-1. Copy `EwBrotherEw.apk` to the phone (USB, Quick Share, or Telegram Saved Messages) and open it. Allow "Install unknown apps" for that source. HyperOS may warn about an unknown app; tap through to install.
+1. Copy `EwBrotherEw.apk` to the phone (USB, Quick Share, or Telegram Saved Messages) and open it. Allow "Install unknown apps" for that source. Play Protect or the phone may warn about an unknown app; tap through, or pause Play Protect scanning while installing.
 2. Open **Ew Brother Ew** and tap **Finish setup** (or go to Settings, then Setup and permissions). Then:
    - **Accessibility service**: turn on "Ew Brother Ew reel counter". **If it's greyed out or says "Restricted setting"** (Android blocks this for sideloaded apps): go to App info, tap the three dots at the top right, choose **Allow restricted settings**, and try again.
    - **Usage access**: allow it.
    - **Notifications**: allow.
-   - **No battery restrictions**: allow.
-3. Xiaomi extras, once: **Autostart** on, **Battery saver = No restrictions**, Other permissions > **Display pop-up windows while running in the background**, and **lock the app in recents**.
+   - **Battery**: pick the unrestricted option (Xiaomi: No restrictions, most others: Unrestricted).
+3. **Phone extras** (only shown on phones that need them): Autostart / Auto launch (Xiaomi, Oppo/Realme/OnePlus, Vivo, Huawei/Honor), Never sleeping apps (Samsung), pop-up windows in background (Xiaomi), and lock the app in recents. Stock Android phones need nothing extra.
 4. Settings > **Preview the pause** shows the real pause screen.
 5. Scroll 10 Reels. The bubble should count, and the pause should appear at 10.
 

@@ -11,6 +11,7 @@ import android.os.SystemClock
 import android.util.Log
 import android.provider.Settings
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import com.ewbrother.app.MainActivity
 import com.ewbrother.app.data.Keys
@@ -81,7 +82,11 @@ class EwAccessibilityService : AccessibilityService() {
     private val systemEvents = object : BroadcastReceiver() {
         override fun onReceive(c: Context, i: Intent) {
             when (i.action) {
-                Intent.ACTION_SCREEN_OFF -> flushWatchTime(trustedNow())
+                Intent.ACTION_SCREEN_OFF -> {
+                    flushWatchTime(trustedNow())
+                    mainHandler.removeCallbacks(pagerPoll) // no polling with the screen off
+                }
+                Intent.ACTION_SCREEN_ON -> startPagerPoll()
                 Intent.ACTION_TIME_CHANGED -> if (autoTimeOn()) {
                     anchorClock()
                     if (day.isNotEmpty()) computeDayEnd()
@@ -123,6 +128,7 @@ class EwAccessibilityService : AccessibilityService() {
         refreshImePackage()
         val filter = IntentFilter(Intent.ACTION_SCREEN_OFF)
         filter.addAction(Intent.ACTION_TIME_CHANGED)
+        filter.addAction(Intent.ACTION_SCREEN_ON)
         registerReceiver(systemEvents, filter)
         Notifier.refreshStatus(this)
         TodayWidget.updateAll(this)
@@ -168,6 +174,7 @@ class EwAccessibilityService : AccessibilityService() {
             ensureToday(trustedNow())
         }
         scheduleFocusCheck()
+        startPagerPoll() // monitor switched on/off
         if (!on(Keys.MONITOR_ON) || !on(Keys.BUBBLE_ON)) {
             bubble.hide()
         } else if (isReelApp(foreground)) {
@@ -237,6 +244,7 @@ class EwAccessibilityService : AccessibilityService() {
         if (pkg == old) return
         foreground = pkg
         val now = trustedNow()
+        startPagerPoll() // starts in YouTube, stops itself anywhere else
 
         if (old != null && isReelApp(old)) {
             lastLeftAt[old] = now
@@ -296,7 +304,80 @@ class EwAccessibilityService : AccessibilityService() {
         }
         val now = trustedNow()
         ensureToday(now)
-        val result = detector.onScroll(pkg, event, now)
+        var result = detector.onScroll(pkg, event, now)
+        // While the pager is being checked on a timer (YouTube Shorts), that check does the
+        // counting; a scroll event that does arrive mustn't count the same Short twice.
+        if (result.newReels > 0 && detector.pollActive(pkg, now)) result = ReelDetector.Result(true, 0)
+        onFeedResult(pkg, result, now)
+    }
+
+    // ------------------------------------------------------------------ YouTube Shorts pager check
+    // YouTube sends one scroll event when Shorts opens and usually none for the swipes after it,
+    // so scroll events alone never counted Shorts. While YouTube is in front (screen on, monitor
+    // on), look at which Short fills the Shorts pager every PAGER_POLL_MS and count when it changes.
+
+    private val pagerPoll = object : Runnable {
+        override fun run() {
+            if (!shouldPollPager()) return
+            try {
+                pollPager()
+            } catch (e: Exception) {
+                Log.w(TAG, "pager check failed", e)
+            }
+            mainHandler.postDelayed(this, DetectionRules.PAGER_POLL_MS)
+        }
+    }
+
+    private fun shouldPollPager(): Boolean {
+        val pkg = foreground ?: return false
+        return on(Keys.MONITOR_ON) && DetectionRules.POLL_PAGER_IDS.containsKey(pkg)
+    }
+
+    private fun startPagerPoll() {
+        mainHandler.removeCallbacks(pagerPoll)
+        if (shouldPollPager()) mainHandler.postDelayed(pagerPoll, DetectionRules.PAGER_POLL_MS)
+    }
+
+    private fun pollPager() {
+        val pkg = foreground ?: return
+        if (screen.isShowing) return // pause or block on top: nothing can be swiped
+        val root = appRoot(pkg) ?: return
+        // Built-in pager IDs, plus any ID for this app added in Settings > Detection check.
+        val ids = DetectionRules.POLL_PAGER_IDS[pkg].orEmpty() + detector.extraIds.filter { it.startsWith("$pkg:id/") }
+        for (id in ids) {
+            val found = try {
+                root.findAccessibilityNodeInfosByViewId(id)
+            } catch (e: Exception) {
+                null
+            } ?: continue
+            val pager = found.firstOrNull { it.isVisibleToUser } ?: continue
+            val now = trustedNow()
+            ensureToday(now)
+            onFeedResult(pkg, detector.onPagerPoll(pkg, pager, id, now), now)
+            return
+        }
+    }
+
+    /** Root of [pkg]'s own app window (not our overlays, not the keyboard). */
+    private fun appRoot(pkg: String): AccessibilityNodeInfo? {
+        try {
+            for (w in windows) {
+                if (w.type != AccessibilityWindowInfo.TYPE_APPLICATION) continue
+                val r = w.root ?: continue
+                if (r.packageName?.toString() == pkg) return r
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "window list failed", e)
+        }
+        return try {
+            rootInActiveWindow?.takeIf { it.packageName?.toString() == pkg }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** Shared by scroll events and the pager check: watch time, limit block, count, pause. */
+    private fun onFeedResult(pkg: String, result: ReelDetector.Result, now: Long) {
         if (!result.inFeed) return
         if (reelStartedAt[pkg] == null) reelStartedAt[pkg] = now
 

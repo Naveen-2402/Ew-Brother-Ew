@@ -78,34 +78,26 @@ class MainActivity : FlutterActivity() {
                     .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
                 result.success(open(settings) || open(appDetails()))
             }
+            "deviceFamily" -> result.success(Oem.family)
             "openBattery" -> {
                 // "unrestricted": Android's one-tap "allow" dialog while still restricted.
-                // Otherwise (or "saver"): the page where you pick the mode yourself; on HyperOS that's
-                // the per-app battery saver page (No restrictions / Battery saver / Restrict).
+                // Otherwise (or "saver"): the page where you pick the mode yourself: the maker's own
+                // battery page if it has one (Xiaomi), else App info, where Battery has
+                // Unrestricted / Optimized on stock Android, Samsung and most others.
                 val mode = call.argument<String>("mode") ?: "unrestricted"
                 val pm = getSystemService(PowerManager::class.java)!!
                 val direct = Intent(
                     Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
                     Uri.parse("package:$packageName"),
                 )
-                val miui = Intent()
-                    .setComponent(ComponentName("com.miui.powerkeeper", "com.miui.powerkeeper.ui.HiddenAppsConfigActivity"))
-                    .putExtra("package_name", packageName)
-                    .putExtra("package_label", "Ew Brother Ew")
                 val opened = (mode == "unrestricted" && !pm.isIgnoringBatteryOptimizations(packageName) && open(direct)) ||
-                    open(miui) ||
-                    open(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) ||
-                    open(appDetails())
+                    Oem.batteryPages(packageName, "Ew Brother Ew").any { open(it) } ||
+                    open(appDetails()) ||
+                    open(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
                 result.success(opened)
             }
             "openAutostart" -> {
-                val miui = Intent().setComponent(
-                    ComponentName(
-                        "com.miui.securitycenter",
-                        "com.miui.permcenter.autostart.AutoStartManagementActivity",
-                    )
-                )
-                result.success(open(miui) || open(appDetails()))
+                result.success(Oem.autostartPages().any { open(it) } || open(appDetails()))
             }
             "openAppDetails" -> result.success(open(appDetails()))
             "settingsChanged" -> {
@@ -207,6 +199,8 @@ class MainActivity : FlutterActivity() {
         false
     } catch (e: SecurityException) {
         false
+    } catch (e: Exception) {
+        false // a maker's settings page that exists but refuses this intent: try the next one
     }
 
     // ---------------------------------------------------------------- backup (F13)

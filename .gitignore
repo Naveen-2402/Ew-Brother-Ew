@@ -12,5 +12,8 @@
 
 # Android signing: never commit
 android/key.properties
+key.properties
+**/key.properties
+keys/
 *.jks
 *.keystore

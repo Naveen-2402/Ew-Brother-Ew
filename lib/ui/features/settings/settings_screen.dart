@@ -278,7 +278,7 @@ class SettingsScreen extends StatelessWidget {
                   color: app.permissions.allCore ? c.good : c.warn,
                 ),
                 title: const Text('Setup and permissions'),
-                subtitle: const Text('Accessibility, usage access, Xiaomi settings'),
+                subtitle: const Text('Accessibility, usage access, notifications, battery'),
                 trailing: const Icon(Icons.chevron_right_rounded),
                 onTap: () => _push(context, const PermissionsScreen()),
               ),

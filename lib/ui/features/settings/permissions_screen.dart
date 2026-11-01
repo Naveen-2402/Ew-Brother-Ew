@@ -74,44 +74,125 @@ class PermissionsScreen extends StatelessWidget {
               await app.refreshPermissions();
             },
           ),
-          _BatteryStep(
-            unrestricted: p.battery,
-            onPick: (unrestricted) => b.openBattery(unrestricted: unrestricted),
+          FutureBuilder<String>(
+            future: _family ??= b.deviceFamily(),
+            builder: (context, snap) {
+              final family = snap.data ?? 'other';
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _BatteryStep(
+                    unrestricted: p.battery,
+                    // Xiaomi names the modes like this; stock Android, Samsung and most others
+                    // say Unrestricted / Optimized under App info > Battery.
+                    labels: family == 'xiaomi'
+                        ? ('No restrictions', 'Battery saver')
+                        : ('Unrestricted', 'Optimized'),
+                    onPick: (unrestricted) => b.openBattery(unrestricted: unrestricted),
+                  ),
+                  ..._extras(context, family, b.openAutostart, b.openAppDetails),
+                ],
+              );
+            },
           ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 28, 20, 4),
-            child: Text('Xiaomi extras', style: context.type.titleLarge),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
-            child: Text('HyperOS can\'t tell us if these are on, so check them once.', style: context.type.bodySmall),
-          ),
+        ],
+      ),
+    );
+  }
+
+  /// Looked up once per app run: the phone maker doesn't change.
+  static Future<String>? _family;
+
+  /// Extra switches some phone makers add on top of Android. They can't be read by apps,
+  /// so they're shown as a checklist. Stock Android (Pixel, Motorola, ...) needs none.
+  static List<Widget> _extras(
+    BuildContext context,
+    String family,
+    VoidCallback openAutostart,
+    VoidCallback openAppDetails,
+  ) {
+    const lockRecents = _Step(
+      title: 'Lock in recents',
+      body: 'Open recent apps, long-press (or pull down) the Ew Brother Ew card and tap the lock, '
+          'so clearing recents doesn\'t close the counter.',
+    );
+    final steps = switch (family) {
+      'xiaomi' => [
           _Step(
             title: 'Autostart',
             body: 'Lets the counter come back after a restart.',
             action: 'Open',
-            onAction: b.openAutostart,
+            onAction: openAutostart,
           ),
           _Step(
             title: 'Pop-up windows in background',
             body: 'App info, Other permissions, allow "Display pop-up windows while running in the background".',
             action: 'App info',
-            onAction: b.openAppDetails,
+            onAction: openAppDetails,
           ),
-          const _Step(
-            title: 'Lock in recents',
-            body: 'Open recent apps, long-press the Ew Brother Ew card, tap the lock.',
+          lockRecents,
+        ],
+      'samsung' => [
+          _Step(
+            title: 'Never sleeping apps',
+            body: 'Settings, Battery, Background usage limits, Never sleeping apps: add Ew Brother Ew. '
+                'Also turn off "Put unused apps to sleep" there if it\'s on.',
+            action: 'App info',
+            onAction: openAppDetails,
           ),
         ],
+      'oppo' => [
+          _Step(
+            title: 'Auto launch',
+            body: 'Allow Ew Brother Ew to auto launch, so the counter comes back after a restart.',
+            action: 'Open',
+            onAction: openAutostart,
+          ),
+          lockRecents,
+        ],
+      'vivo' => [
+          _Step(
+            title: 'Autostart / background start',
+            body: 'Allow Ew Brother Ew to start in the background, so the counter comes back after a restart.',
+            action: 'Open',
+            onAction: openAutostart,
+          ),
+          lockRecents,
+        ],
+      'huawei' => [
+          _Step(
+            title: 'App launch',
+            body: 'Set Ew Brother Ew to "Manage manually" and allow auto-launch, secondary launch '
+                'and run in background.',
+            action: 'Open',
+            onAction: openAutostart,
+          ),
+          lockRecents,
+        ],
+      _ => const <Widget>[],
+    };
+    if (steps.isEmpty) return const [];
+    return [
+      Padding(
+        padding: const EdgeInsets.fromLTRB(20, 28, 20, 4),
+        child: Text('Phone extras', style: context.type.titleLarge),
       ),
-    );
+      Padding(
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+        child: Text(
+          'Your phone adds its own background limits. Apps can\'t see these switches, so check them once.',
+          style: context.type.bodySmall,
+        ),
+      ),
+      ...steps,
+    ];
   }
 }
 
 class _Step extends StatelessWidget {
   const _Step({required this.title, required this.body, this.done, this.action, this.onAction, this.extra});
 
-  /// null = status unknown (manual Xiaomi step).
+  /// null = status unknown (a phone maker's own switch apps can't read).
   final bool? done;
   final String title;
   final String body;
@@ -167,9 +248,12 @@ class _Step extends StatelessWidget {
 /// Battery mode as two choices. The highlighted one is what Android reports right now;
 /// tapping either opens the system page to switch (apps can't change it themselves).
 class _BatteryStep extends StatelessWidget {
-  const _BatteryStep({required this.unrestricted, required this.onPick});
+  const _BatteryStep({required this.unrestricted, required this.labels, required this.onPick});
 
   final bool unrestricted;
+
+  /// (unrestricted, restricted) in the phone's own words.
+  final (String, String) labels;
   final ValueChanged<bool> onPick;
 
   @override
@@ -199,8 +283,8 @@ class _BatteryStep extends StatelessWidget {
                     const SizedBox(height: 2),
                     Text(
                       unrestricted
-                          ? 'No restrictions: the counter keeps running in the background.'
-                          : 'Battery saver: HyperOS may stop the counter in the background.',
+                          ? '${labels.$1}: the counter keeps running in the background.'
+                          : '${labels.$2}: the phone may stop the counter in the background.',
                       style: context.type.bodySmall,
                     ),
                   ],
@@ -213,9 +297,9 @@ class _BatteryStep extends StatelessWidget {
             width: double.infinity,
             child: SegmentedButton<bool>(
               showSelectedIcon: false,
-              segments: const [
-                ButtonSegment(value: true, label: Text('No restrictions'), icon: Icon(Icons.bolt_rounded)),
-                ButtonSegment(value: false, label: Text('Battery saver'), icon: Icon(Icons.eco_outlined)),
+              segments: [
+                ButtonSegment(value: true, label: Text(labels.$1), icon: const Icon(Icons.bolt_rounded)),
+                ButtonSegment(value: false, label: Text(labels.$2), icon: const Icon(Icons.eco_outlined)),
               ],
               selected: {unrestricted},
               // Tapping the selected one too: opens the page so it can be checked or changed.
@@ -225,7 +309,8 @@ class _BatteryStep extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            'Opens the system page; pick the same option there. This screen updates when you come back.',
+            'Opens the system page (on most phones: App info, Battery). Pick the same option there; '
+            'this screen updates when you come back.',
             style: context.type.bodySmall,
           ),
         ],

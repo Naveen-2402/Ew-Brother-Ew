@@ -41,6 +41,77 @@ class ReelDetector(private val screenSize: () -> Pair<Int, Int>) {
 
     fun reset(pkg: String) {
         sessions.remove(pkg)
+        polls.remove(pkg)
+    }
+
+    // ---------------------------------------------------------------- polled pager (YouTube Shorts)
+
+    private class PollState(
+        val pagerKey: Int,
+        var maxIndex: Int,
+        var lastItem: Int,
+        var lastSeenAt: Long,
+    )
+
+    private val polls = HashMap<String, PollState>()
+
+    /** True while polling sees the pager: scroll events from [pkg] then don't count (no double count). */
+    fun pollActive(pkg: String, now: Long): Boolean {
+        val p = polls[pkg] ?: return false
+        return now - p.lastSeenAt < DetectionRules.POLL_ACTIVE_MS
+    }
+
+    /**
+     * One look at the Shorts pager. Counts when a different Short fills it than last time.
+     * With list positions (rowIndex) it uses the same rules as scroll events: only moving past the
+     * furthest Short counts, scrolling back doesn't, a reload at the top re-baselines, a big jump
+     * counts 0. Without positions, any change of the Short on screen counts one.
+     * The first look after entering is the baseline and never counts.
+     */
+    fun onPagerPoll(pkg: String, pager: AccessibilityNodeInfo, id: String, now: Long): Result {
+        remember(pkg, id, pager.className, true) // shows as counted in Settings > Detection check
+        val pr = Rect()
+        pager.getBoundsInScreen(pr)
+        if (pr.height() <= 0) return none
+
+        // The page that fills most of the pager; none while mid-swipe (two half pages).
+        var current: AccessibilityNodeInfo? = null
+        val cr = Rect()
+        for (i in 0 until minOf(pager.childCount, 6)) {
+            val child = pager.getChild(i) ?: continue
+            child.getBoundsInScreen(cr)
+            if (!cr.intersect(pr)) continue
+            if (cr.height() >= pr.height() * DetectionRules.PAGE_VISIBLE_RATIO) {
+                current = child
+                break
+            }
+        }
+        val page = current ?: return Result(true, 0)
+        val index = page.collectionItemInfo?.rowIndex?.takeIf { it >= 0 }
+        val item = page.hashCode()
+        val key = pager.hashCode() * 31 + pager.windowId
+
+        val p = polls[pkg]
+        if (p == null || p.pagerKey != key || now - p.lastSeenAt > DetectionRules.SESSION_GAP_MS) {
+            polls[pkg] = PollState(key, index ?: -1, item, now) // baseline
+            return Result(true, 0)
+        }
+        p.lastSeenAt = now
+        if (index != null && p.maxIndex >= 0) {
+            p.lastItem = item
+            if (p.maxIndex > DetectionRules.MAX_JUMP && index <= 1) {
+                p.maxIndex = index // feed reloaded at the top
+                return Result(true, 0)
+            }
+            if (index <= p.maxIndex) return Result(true, 0) // same Short, or went back
+            val jump = index - p.maxIndex
+            p.maxIndex = index
+            return Result(true, if (jump > DetectionRules.MAX_JUMP) 0 else jump)
+        }
+        if (item == p.lastItem) return Result(true, 0)
+        p.lastItem = item
+        if (index != null) p.maxIndex = index
+        return Result(true, 1)
     }
 
     fun onScroll(pkg: String, event: AccessibilityEvent, now: Long): Result {
