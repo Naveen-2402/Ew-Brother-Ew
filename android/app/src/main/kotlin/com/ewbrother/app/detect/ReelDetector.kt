@@ -55,6 +55,15 @@ class ReelDetector(private val screenSize: () -> Pair<Int, Int>) {
 
     private val polls = HashMap<String, PollState>()
 
+    /**
+     * Forget the polled Short (not the scroll session) after a full-screen overlay closes, so the
+     * next look takes a fresh baseline instead of comparing against what it saw before the overlay.
+     * The Short under the overlay is unchanged, so no swipe is lost.
+     */
+    fun resetPoll(pkg: String) {
+        polls.remove(pkg)
+    }
+
     /** True while polling sees the pager: scroll events from [pkg] then don't count (no double count). */
     fun pollActive(pkg: String, now: Long): Boolean {
         val p = polls[pkg] ?: return false
@@ -70,6 +79,9 @@ class ReelDetector(private val screenSize: () -> Pair<Int, Int>) {
      */
     fun onPagerPoll(pkg: String, pager: AccessibilityNodeInfo, id: String, now: Long): Result {
         remember(pkg, id, pager.className, true) // shows as counted in Settings > Detection check
+        // Read live values, not the service's node cache: after an overlay (pause, interrupt) the
+        // cache can hold the pager's old pages and the Short on screen would never seem to change.
+        pager.refresh()
         val pr = Rect()
         pager.getBoundsInScreen(pr)
         if (pr.height() <= 0) return none
@@ -79,6 +91,7 @@ class ReelDetector(private val screenSize: () -> Pair<Int, Int>) {
         val cr = Rect()
         for (i in 0 until minOf(pager.childCount, 6)) {
             val child = pager.getChild(i) ?: continue
+            if (!child.refresh()) continue // page already gone (recycled mid-swipe)
             child.getBoundsInScreen(cr)
             if (!cr.intersect(pr)) continue
             if (cr.height() >= pr.height() * DetectionRules.PAGE_VISIBLE_RATIO) {

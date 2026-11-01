@@ -32,7 +32,11 @@ import kotlin.math.ceil
  * The countdown uses wall-clock time (not ValueAnimator), so turning off system
  * animations cannot skip it.
  */
-class ScreenOverlay(private val ctx: Context) {
+class ScreenOverlay(
+    private val ctx: Context,
+    /** Called after an overlay is removed (button, leaving the app, or replaced by another). */
+    private val onClosed: () -> Unit = {},
+) {
 
     data class Spec(
         val headline: String,
@@ -227,6 +231,7 @@ class ScreenOverlay(private val ctx: Context) {
         tick?.let { handler.removeCallbacks(it) }
         tick = null
         deadline = 0L
+        val wasShowing = root != null
         root?.let { v ->
             try {
                 wm.removeView(v)
@@ -235,6 +240,7 @@ class ScreenOverlay(private val ctx: Context) {
         }
         root = null
         releaseAudio()
+        if (wasShowing) onClosed()
     }
 
     /** Transient audio focus makes Instagram/YouTube pause playback behind the overlay. */

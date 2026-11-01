@@ -1,6 +1,7 @@
 package com.ewbrother.app.service
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -104,12 +105,25 @@ class EwAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
+        // Apply the window-list flag right away. A flag added to the XML config in an app update
+        // otherwise only takes effect after the service is turned off and on. Without it, events
+        // and the screen tree only come from the "active" window, which can stay stuck on our own
+        // focused overlay (interrupt, pause) after it closes: YouTube Shorts then weren't counted.
+        try {
+            serviceInfo = serviceInfo?.apply {
+                flags = flags or
+                    AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
+                    AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "service flags not applied", e)
+        }
         store = Store(this)
         detector = ReelDetector {
             val m = resources.displayMetrics
             m.widthPixels to m.heightPixels
         }
-        screen = ScreenOverlay(this)
+        screen = ScreenOverlay(this, onClosed = { afterOverlayClosed() })
         bubble = Bubble(
             this,
             onMoved = { x, y ->
@@ -140,9 +154,10 @@ class EwAccessibilityService : AccessibilityService() {
             unregisterReceiver(systemEvents)
         } catch (ignored: Exception) {
         }
-        mainHandler.removeCallbacksAndMessages(null)
+        foreground = null // so a closing overlay below doesn't restart the Shorts check
         if (::screen.isInitialized) screen.dismiss()
         if (::bubble.isInitialized) bubble.hide()
+        mainHandler.removeCallbacksAndMessages(null) // after dismiss: nothing it posted survives
         instance = null
         Notifier.refreshStatus(this)
         MainActivity.notifyFlutter("serviceChanged")
@@ -333,6 +348,16 @@ class EwAccessibilityService : AccessibilityService() {
         return on(Keys.MONITOR_ON) && DetectionRules.POLL_PAGER_IDS.containsKey(pkg)
     }
 
+    /**
+     * A pause, block or interrupt just closed. Our overlay had window focus, so start the YouTube
+     * check fresh: new baseline (the Short underneath is the same one, so nothing is lost) and a
+     * restarted timer. Instagram's scroll-event counting is left as it is.
+     */
+    private fun afterOverlayClosed() {
+        foreground?.let { detector.resetPoll(it) }
+        startPagerPoll()
+    }
+
     private fun startPagerPoll() {
         mainHandler.removeCallbacks(pagerPoll)
         if (shouldPollPager()) mainHandler.postDelayed(pagerPoll, DetectionRules.PAGER_POLL_MS)
@@ -342,6 +367,7 @@ class EwAccessibilityService : AccessibilityService() {
         val pkg = foreground ?: return
         if (screen.isShowing) return // pause or block on top: nothing can be swiped
         val root = appRoot(pkg) ?: return
+        root.refresh() // live tree, not the cached one (see ReelDetector.onPagerPoll)
         // Built-in pager IDs, plus any ID for this app added in Settings > Detection check.
         val ids = DetectionRules.POLL_PAGER_IDS[pkg].orEmpty() + detector.extraIds.filter { it.startsWith("$pkg:id/") }
         for (id in ids) {
@@ -630,7 +656,8 @@ class EwAccessibilityService : AccessibilityService() {
             Log.w(TAG, "window list failed", e)
         }
         return try {
-            rootInActiveWindow?.packageName?.toString()
+            // While our own overlay is up it can be the "active" window; that isn't an app switch.
+            rootInActiveWindow?.packageName?.toString()?.takeUnless { it == packageName && screen.isShowing }
         } catch (e: Exception) {
             null
         }
