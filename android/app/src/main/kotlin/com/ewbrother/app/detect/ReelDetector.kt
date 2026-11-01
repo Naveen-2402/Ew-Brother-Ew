@@ -64,11 +64,9 @@ class ReelDetector(private val screenSize: () -> Pair<Int, Int>) {
         polls.remove(pkg)
     }
 
-    /** True while polling sees the pager: scroll events from [pkg] then don't count (no double count). */
-    fun pollActive(pkg: String, now: Long): Boolean {
-        val p = polls[pkg] ?: return false
-        return now - p.lastSeenAt < DetectionRules.POLL_ACTIVE_MS
-    }
+    /** What the last pager check saw, for the live log in Settings > Detection check. */
+    var lastPollNote: String = ""
+        private set
 
     /**
      * One look at the Shorts pager. Counts when a different Short fills it than last time.
@@ -99,9 +97,14 @@ class ReelDetector(private val screenSize: () -> Pair<Int, Int>) {
                 break
             }
         }
-        val page = current ?: return Result(true, 0)
+        val page = current ?: run {
+            lastPollNote = "pager found, no full page (mid-swipe?)"
+            return Result(true, 0)
+        }
         val index = page.collectionItemInfo?.rowIndex?.takeIf { it >= 0 }
         val item = page.hashCode()
+        lastPollNote = "pager found, ${pager.childCount} children, page " +
+            (if (index != null) "row $index" else "#${Integer.toHexString(item)}")
         val key = pager.hashCode() * 31 + pager.windowId
 
         val p = polls[pkg]

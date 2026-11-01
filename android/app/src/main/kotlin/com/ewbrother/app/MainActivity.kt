@@ -145,6 +145,7 @@ class MainActivity : FlutterActivity() {
                 }.start()
             }
             "detectionLog" -> result.success(EwAccessibilityService.instance?.detectionLog() ?: emptyList<String>())
+            "debugLog" -> result.success(EwAccessibilityService.instance?.debugLog() ?: emptyList<String>())
             "previewPause" -> {
                 val svc = EwAccessibilityService.instance
                 svc?.previewPause()

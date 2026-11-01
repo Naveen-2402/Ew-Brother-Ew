@@ -52,9 +52,6 @@ object DetectionRules {
     /** How often the YouTube Shorts pager is checked while YouTube is in front and the screen is on. */
     const val PAGER_POLL_MS = 700L
 
-    /** While the pager was seen this recently, scroll events from that app don't count (no double count). */
-    const val POLL_ACTIVE_MS = 2_500L
-
     /** A page counts as "on screen" when it fills this much of the pager's height. */
     const val PAGE_VISIBLE_RATIO = 0.6f
 
@@ -86,8 +83,19 @@ object DetectionRules {
     /** No reel activity for this long starts a new viewing session. */
     const val SESSION_GAP_MS = 3 * 60_000L
 
-    /** Smart interrupt is not shown again if you come back within this window. */
-    const val INTERRUPT_COOLDOWN_MS = 2 * 60_000L
+    /**
+     * Smart interrupt shows on every open of Instagram/YouTube. Only a return within this short
+     * window doesn't ask again: that's a pop-up or another app's window passing over the reel app
+     * (Play services, the phone's video toolbar), not you opening it. It used to be 2 minutes,
+     * which made YouTube skip the question most of the time.
+     */
+    const val INTERRUPT_COOLDOWN_MS = 10_000L
+
+    /**
+     * Scroll events and the Shorts timer check can both see the same swipe. Whichever counts
+     * first wins; the other path's count within this window is the same Short and is dropped.
+     */
+    const val DEDUPE_MS = 1_000L
 
     /** Packages whose window changes are ignored (shade, keyboard, ourselves). */
     val IGNORED_PACKAGES: Set<String> = setOf(

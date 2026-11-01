@@ -238,7 +238,9 @@ class EwAccessibilityService : AccessibilityService() {
                 // Treating those as "left the app" hid the bubble and stopped counting. Only switch
                 // when the app really in front changed; re-check shortly in case the window list lags.
                 if (isReelApp(foreground) && target != foreground && !isReelApp(target) && target != SELF_PKG) {
-                    if (frontApp() == foreground) {
+                    val front = frontApp()
+                    if (front == foreground) {
+                        if (target != packageName) dbg("window from ${short(target)} ignored, ${short(front)} still in front")
                         scheduleFrontCheck()
                         return
                     }
@@ -259,6 +261,7 @@ class EwAccessibilityService : AccessibilityService() {
         if (pkg == old) return
         foreground = pkg
         val now = trustedNow()
+        if (isReelApp(old) || isReelApp(pkg)) dbg("app: ${short(old)} -> ${short(pkg)}")
         startPagerPoll() // starts in YouTube, stops itself anywhere else
 
         if (old != null && isReelApp(old)) {
@@ -301,8 +304,14 @@ class EwAccessibilityService : AccessibilityService() {
         // F3: over the limit, the block appears in the reel feed itself (see onReelScroll),
         // so the rest of Instagram/YouTube (messages, normal videos) stays usable.
         // F9: smart interrupt when opening Instagram/YouTube.
-        if (on(Keys.INTERRUPT_ON) && now - (lastLeftAt[pkg] ?: 0L) > DetectionRules.INTERRUPT_COOLDOWN_MS) {
-            showInterrupt(pkg)
+        if (on(Keys.INTERRUPT_ON)) {
+            val away = now - (lastLeftAt[pkg] ?: 0L)
+            if (away > DetectionRules.INTERRUPT_COOLDOWN_MS) {
+                dbg("interrupt shown")
+                showInterrupt(pkg)
+            } else {
+                dbg("interrupt skipped: back after ${away / 1000} s")
+            }
         }
     }
 
@@ -319,11 +328,11 @@ class EwAccessibilityService : AccessibilityService() {
         }
         val now = trustedNow()
         ensureToday(now)
-        var result = detector.onScroll(pkg, event, now)
-        // While the pager is being checked on a timer (YouTube Shorts), that check does the
-        // counting; a scroll event that does arrive mustn't count the same Short twice.
-        if (result.newReels > 0 && detector.pollActive(pkg, now)) result = ReelDetector.Result(true, 0)
-        onFeedResult(pkg, result, now)
+        val result = detector.onScroll(pkg, event, now)
+        if (pkg == DetectionRules.YOUTUBE && result.inFeed) {
+            dbg("scroll ${event.fromIndex}..${event.toIndex} -> ${if (result.newReels > 0) "+${result.newReels}" else "0"}")
+        }
+        onFeedResult(pkg, result, now, SRC_SCROLL)
     }
 
     // ------------------------------------------------------------------ YouTube Shorts pager check
@@ -354,6 +363,7 @@ class EwAccessibilityService : AccessibilityService() {
      * restarted timer. Instagram's scroll-event counting is left as it is.
      */
     private fun afterOverlayClosed() {
+        if (isReelApp(foreground)) dbg("overlay closed in ${short(foreground)}")
         foreground?.let { detector.resetPoll(it) }
         startPagerPoll()
     }
@@ -365,8 +375,8 @@ class EwAccessibilityService : AccessibilityService() {
 
     private fun pollPager() {
         val pkg = foreground ?: return
-        if (screen.isShowing) return // pause or block on top: nothing can be swiped
-        val root = appRoot(pkg) ?: return
+        if (screen.isShowing) return pollNote("overlay on top, waiting") // nothing can be swiped
+        val root = appRoot(pkg) ?: return pollNote("no $pkg window found")
         root.refresh() // live tree, not the cached one (see ReelDetector.onPagerPoll)
         // Built-in pager IDs, plus any ID for this app added in Settings > Detection check.
         val ids = DetectionRules.POLL_PAGER_IDS[pkg].orEmpty() + detector.extraIds.filter { it.startsWith("$pkg:id/") }
@@ -379,8 +389,24 @@ class EwAccessibilityService : AccessibilityService() {
             val pager = found.firstOrNull { it.isVisibleToUser } ?: continue
             val now = trustedNow()
             ensureToday(now)
-            onFeedResult(pkg, detector.onPagerPoll(pkg, pager, id, now), now)
+            val result = detector.onPagerPoll(pkg, pager, id, now)
+            pollNote(detector.lastPollNote)
+            if (result.newReels > 0) dbg("check -> +${result.newReels}")
+            onFeedResult(pkg, result, now, SRC_POLL)
             return
+        }
+        pollNote("no Shorts pager on screen")
+    }
+
+    private var lastPollLogged = ""
+
+    /** Logs the pager check's state only when it changes, so the live log stays readable. */
+    private fun pollNote(note: String) {
+        // Page identities change every Short; log the kind of state, not every value.
+        val kind = note.substringBefore(", page")
+        if (kind != lastPollLogged) {
+            lastPollLogged = kind
+            dbg("check: $note")
         }
     }
 
@@ -402,8 +428,28 @@ class EwAccessibilityService : AccessibilityService() {
         }
     }
 
-    /** Shared by scroll events and the pager check: watch time, limit block, count, pause. */
-    private fun onFeedResult(pkg: String, result: ReelDetector.Result, now: Long) {
+    // Last count per app and which path made it, for de-duplication.
+    private val lastCountAt = HashMap<String, Long>()
+    private val lastCountSrc = HashMap<String, String>()
+
+    /**
+     * Shared by scroll events and the pager check: watch time, limit block, count, pause.
+     * Neither path blocks the other (that blocking is what stopped YouTube Shorts counting after
+     * the interrupt). Instead, a count from one path right after a count from the OTHER path is
+     * the same swipe seen twice, and is dropped.
+     */
+    private fun onFeedResult(pkg: String, input: ReelDetector.Result, now: Long, source: String) {
+        var result = input
+        if (result.newReels > 0) {
+            val prevSrc = lastCountSrc[pkg]
+            if (prevSrc != null && prevSrc != source && now - (lastCountAt[pkg] ?: 0L) < DetectionRules.DEDUPE_MS) {
+                dbg("$source +${result.newReels} dropped (already counted by $prevSrc)")
+                result = ReelDetector.Result(true, 0)
+            } else {
+                lastCountAt[pkg] = now
+                lastCountSrc[pkg] = source
+            }
+        }
         if (!result.inFeed) return
         if (reelStartedAt[pkg] == null) reelStartedAt[pkg] = now
 
@@ -818,6 +864,28 @@ class EwAccessibilityService : AccessibilityService() {
     /** Lines for Settings > Detection check. */
     fun detectionLog(): List<String> = detector.log.toList()
 
+    // ------------------------------------------------------------------ live log
+    // What the counter decided and why, newest first, shown in Settings > Detection check.
+    // Only app switches into/out of Instagram and YouTube, overlays, and YouTube counting.
+
+    private val debug = ArrayDeque<String>()
+    private val clock = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US)
+
+    private fun dbg(line: String) {
+        debug.addFirst("${clock.format(java.util.Date())}  $line")
+        while (debug.size > DEBUG_LINES) debug.removeLast()
+    }
+
+    fun debugLog(): List<String> = debug.toList()
+
+    private fun short(pkg: String?): String = when (pkg) {
+        null -> "none"
+        DetectionRules.INSTAGRAM -> "Instagram"
+        DetectionRules.YOUTUBE -> "YouTube"
+        SELF_PKG -> "Ew Brother app"
+        else -> pkg
+    }
+
     /** Settings > "Preview pause": shows the real overlay over whatever is on screen. */
     fun previewPause() {
         val ms = (settings[Keys.PAUSE_SECONDS]?.toIntOrNull() ?: 5).coerceIn(3, 15) * 1000L
@@ -831,6 +899,9 @@ class EwAccessibilityService : AccessibilityService() {
         private const val LIMIT_PAUSE_MS = 30_000L
         private const val FOCUS_CHECK_MS = 15_000L
         private const val FRONT_CHECK_MS = 800L
+        private const val SRC_SCROLL = "scroll"
+        private const val SRC_POLL = "check"
+        private const val DEBUG_LINES = 80
         private const val MIN_DAY_MS = 20 * 3_600_000L
 
         @Volatile

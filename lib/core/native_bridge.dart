@@ -133,6 +133,15 @@ class NativeBridge {
     }
   }
 
+  /// The counter's live log, newest first (app switches, overlays, YouTube counting).
+  Future<List<String>> debugLog() async {
+    try {
+      return await _channel.invokeListMethod<String>('debugLog') ?? [];
+    } on PlatformException {
+      return [];
+    }
+  }
+
   /// Returns false if the accessibility service is not running.
   Future<bool> previewPause() async {
     try {
