@@ -31,20 +31,26 @@ class ActionReceiver : BroadcastReceiver() {
         when (action) {
             ACTION_TICK_TASK -> {
                 store.setTaskDone(id, System.currentTimeMillis())
-                if (source == SRC_MORNING) Notifier.postMorning(ctx)
+                when (source) {
+                    SRC_MORNING -> Notifier.postMorning(ctx)
+                    SRC_TASK -> Notifier.cancel(ctx, Notifier.ID_TASK_BASE + id.toInt())
+                }
                 afterDataChange(ctx)
+                AlarmScheduler.scheduleAll(ctx)
             }
             ACTION_TICK_HABIT -> {
                 val today = store.today()
-                if (source == SRC_WIDGET) {
-                    val current = store.habitsToday(today).firstOrNull { it.id == id }?.done ?: false
-                    store.setHabitDone(id, today, !current)
-                } else {
-                    store.setHabitDone(id, today, true)
+                val h = store.habitsToday(today).firstOrNull { it.id == id }
+                when {
+                    h == null -> {}
+                    // Several times a day: +1 (capped at the target, a stray tap can't be undone here).
+                    h.multi -> if (!h.done) store.addHabitCount(id, today, 1, cap = true)
+                    source == SRC_WIDGET -> store.setHabitDone(id, today, !h.done)
+                    else -> store.setHabitDone(id, today, true)
                 }
                 when (source) {
                     SRC_EVENING -> Notifier.postEvening(ctx)
-                    SRC_HABIT -> Notifier.cancel(ctx, Notifier.ID_HABIT_BASE + id.toInt())
+                    SRC_HABIT -> Notifier.postHabit(ctx, id, fromAlarm = false) // shows the new count, or clears when done
                 }
                 afterDataChange(ctx)
             }
@@ -61,6 +67,7 @@ class ActionReceiver : BroadcastReceiver() {
                     AlarmScheduler.KIND_EVENING -> Notifier.postEvening(ctx)
                     AlarmScheduler.KIND_WEEKLY -> Notifier.postWeekly(ctx)
                     AlarmScheduler.KIND_HABIT -> Notifier.postHabit(ctx, id)
+                    AlarmScheduler.KIND_TASK -> Notifier.postTask(ctx, id)
                 }
                 AlarmScheduler.scheduleAll(ctx)
             }
@@ -84,5 +91,6 @@ class ActionReceiver : BroadcastReceiver() {
         const val SRC_EVENING = "evening"
         const val SRC_HABIT = "habit"
         const val SRC_WIDGET = "widget"
+        const val SRC_TASK = "task"
     }
 }

@@ -11,6 +11,7 @@ import android.os.SystemClock
 import android.util.Log
 import android.provider.Settings
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityWindowInfo
 import com.ewbrother.app.MainActivity
 import com.ewbrother.app.data.Keys
 import com.ewbrother.app.data.LogicalDay
@@ -205,11 +206,22 @@ class EwAccessibilityService : AccessibilityService() {
         when (event.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
                 // Our own overlays are ignored, but opening the Ew Brother app itself is a real app switch.
-                if (pkg == packageName && event.className?.toString() == MainActivity::class.java.name) {
-                    onWindowChanged(SELF_PKG)
+                val target = if (pkg == packageName && event.className?.toString() == MainActivity::class.java.name) {
+                    SELF_PKG
                 } else {
-                    onWindowChanged(pkg)
+                    pkg
                 }
+                // In Instagram/YouTube, other packages also send window events without you leaving:
+                // Play services pop-ups, toasts, HyperOS's video toolbox (it watches YouTube) and so on.
+                // Treating those as "left the app" hid the bubble and stopped counting. Only switch
+                // when the app really in front changed; re-check shortly in case the window list lags.
+                if (isReelApp(foreground) && target != foreground && !isReelApp(target) && target != SELF_PKG) {
+                    if (frontApp() == foreground) {
+                        scheduleFrontCheck()
+                        return
+                    }
+                }
+                onWindowChanged(target)
             }
             AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
                 if (pkg !in DetectionRules.APPS) return // cheap early exit for all other apps
@@ -275,13 +287,8 @@ class EwAccessibilityService : AccessibilityService() {
         if (!on(Keys.MONITOR_ON)) return
         if (foreground != pkg) {
             // A late scroll event can arrive just after you left; only count it as coming back
-            // if the reel app is really the active window.
-            val active = try {
-                rootInActiveWindow?.packageName?.toString()
-            } catch (e: Exception) {
-                null
-            }
-            if (active != pkg) return
+            // if the reel app is really the app in front.
+            if (frontApp() != pkg) return
             // Back in the reel app without a window event (e.g. after a floating assistant or
             // pop-up): run the same entry checks, so an escaped pause or a focus block comes back.
             onWindowChanged(pkg)
@@ -471,7 +478,24 @@ class EwAccessibilityService : AccessibilityService() {
     private fun updateBubble() {
         if (!bubble.isShowing) return
         val total = total()
-        bubble.update(total, counts["instagram"] ?: 0, counts["youtube"] ?: 0, OverlayStyle.progressColor(total, limit()))
+        val limitOn = on(Keys.LIMIT_ON)
+        // Without a hard limit the ring still fills toward the soft limit of 100 (same as the app).
+        val ringLimit = if (limitOn) limit() else 100
+        val app = DetectionRules.APPS[foreground] ?: "instagram"
+        val key = if (app == "youtube") Keys.INTERVAL_YOUTUBE else Keys.INTERVAL_INSTAGRAM
+        val interval = (settings[key]?.toIntOrNull() ?: 10).coerceIn(1, 100)
+        val appCount = counts[app] ?: 0
+        bubble.update(
+            Bubble.State(
+                total = total,
+                instagram = counts["instagram"] ?: 0,
+                youtube = counts["youtube"] ?: 0,
+                color = OverlayStyle.progressColor(total, ringLimit),
+                progress = total.toFloat() / ringLimit,
+                nextPauseIn = interval - appCount % interval,
+                left = if (limitOn) limit() - total else null,
+            )
+        )
     }
 
     private fun goHome() {
@@ -507,13 +531,45 @@ class EwAccessibilityService : AccessibilityService() {
         if (on(Keys.FOCUS_ON)) mainHandler.postDelayed(focusCheck, FOCUS_CHECK_MS)
     }
 
-    private fun checkFocusNow() {
-        if (screen.isShowing) return
-        val pkg = try {
+    /**
+     * Package of the app really in front: the active (or topmost) application window.
+     * Overlays, toasts, keyboards, the status bar and our own bubble are not application windows.
+     */
+    private fun frontApp(): String? {
+        try {
+            var fallback: String? = null
+            for (w in windows) {
+                if (w.type != AccessibilityWindowInfo.TYPE_APPLICATION) continue
+                val p = w.root?.packageName?.toString() ?: continue
+                if (w.isActive || w.isFocused) return p
+                if (fallback == null) fallback = p
+            }
+            if (fallback != null) return fallback
+        } catch (e: Exception) {
+            Log.w(TAG, "window list failed", e)
+        }
+        return try {
             rootInActiveWindow?.packageName?.toString()
         } catch (e: Exception) {
             null
-        } ?: return
+        }
+    }
+
+    /** After ignoring a window event in a reel app: if you did leave after all, catch up. */
+    private val frontCheck = Runnable {
+        if (!isReelApp(foreground)) return@Runnable
+        val front = frontApp() ?: return@Runnable
+        if (front != foreground) onWindowChanged(if (front == packageName) SELF_PKG else front)
+    }
+
+    private fun scheduleFrontCheck() {
+        mainHandler.removeCallbacks(frontCheck)
+        mainHandler.postDelayed(frontCheck, FRONT_CHECK_MS)
+    }
+
+    private fun checkFocusNow() {
+        if (screen.isShowing) return
+        val pkg = frontApp() ?: return
         if (pkg == packageName || pkg == imePackage || pkg in DetectionRules.IGNORED_PACKAGES) return
         if (pkg != foreground) {
             onWindowChanged(pkg) // does the leave bookkeeping and shows the gate if needed
@@ -666,6 +722,7 @@ class EwAccessibilityService : AccessibilityService() {
         private const val TAG = "EwBrother"
         private const val LIMIT_PAUSE_MS = 30_000L
         private const val FOCUS_CHECK_MS = 15_000L
+        private const val FRONT_CHECK_MS = 800L
         private const val MIN_DAY_MS = 20 * 3_600_000L
 
         @Volatile

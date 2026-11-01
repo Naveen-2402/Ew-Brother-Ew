@@ -51,8 +51,8 @@ class TasksViewModel extends ChangeNotifier {
   }
 
   /// false when a star was asked for but 3 are already starred.
-  Future<bool> add(String title, {bool repeat = false, bool top = false}) =>
-      repo.add(title, repeatDaily: repeat, top: top);
+  Future<bool> add(String title, {bool repeat = false, bool top = false, DateTime? remindAt}) =>
+      repo.add(title, repeatDaily: repeat, top: top, remindAt: remindAt);
 
   Future<void> complete(Task t) async {
     tickHaptic();

@@ -9,21 +9,23 @@ import com.ewbrother.app.data.Store
 import java.util.Calendar
 
 /**
- * Schedules the next morning / evening / weekly / per-habit alarm.
+ * Schedules the next morning / evening / weekly / per-habit / per-task alarm.
  * Uses inexact setAndAllowWhileIdle: no SCHEDULE_EXACT_ALARM permission needed on Android 14;
  * a reminder may arrive a few minutes late in deep sleep, which is fine for reminders.
- * Every alarm reschedules everything after it fires.
+ * Every alarm reschedules everything after it fires, so interval reminders walk forward slot by slot.
  */
 object AlarmScheduler {
     const val KIND_MORNING = "morning"
     const val KIND_EVENING = "evening"
     const val KIND_WEEKLY = "weekly"
     const val KIND_HABIT = "habit"
+    const val KIND_TASK = "task"
 
     private const val REQ_MORNING = 10
     private const val REQ_EVENING = 11
     private const val REQ_WEEKLY = 12
     private const val REQ_HABIT_BASE = 2000
+    private const val REQ_TASK_BASE = 1_000_000
 
     fun scheduleAll(ctx: Context) {
         val store = Store(ctx)
@@ -38,13 +40,35 @@ object AlarmScheduler {
         Store.jsonList(s[Keys.ALARM_HABIT_IDS]).mapNotNull { it.toLongOrNull() }.forEach { id ->
             set(ctx, REQ_HABIT_BASE + id.toInt(), KIND_HABIT, id, null)
         }
-        val scheduled = ArrayList<String>()
+        val habits = ArrayList<String>()
         store.habitsToday(store.today()).forEach { h ->
-            val time = h.reminder ?: return@forEach
-            set(ctx, REQ_HABIT_BASE + h.id.toInt(), KIND_HABIT, h.id, nextDaily(time, now))
-            scheduled.add(h.id.toString())
+            val start = h.reminder ?: return@forEach
+            set(ctx, REQ_HABIT_BASE + h.id.toInt(), KIND_HABIT, h.id, nextSlot(start, h.until, h.every, now))
+            habits.add(h.id.toString())
         }
-        store.set(Keys.ALARM_HABIT_IDS, Store.toJson(scheduled))
+        store.set(Keys.ALARM_HABIT_IDS, Store.toJson(habits))
+
+        // Tasks: same pattern.
+        Store.jsonList(s[Keys.ALARM_TASK_IDS]).mapNotNull { it.toLongOrNull() }.forEach { id ->
+            set(ctx, REQ_TASK_BASE + id.toInt(), KIND_TASK, id, null)
+        }
+        val tasks = ArrayList<String>()
+        store.taskReminders().forEach { t ->
+            val at = taskNext(t, now) ?: return@forEach
+            set(ctx, REQ_TASK_BASE + t.id.toInt(), KIND_TASK, t.id, at)
+            tasks.add(t.id.toString())
+        }
+        store.set(Keys.ALARM_TASK_IDS, Store.toJson(tasks))
+    }
+
+    /** Repeat-daily: every day at the reminder's time of day. Otherwise once, if still ahead. */
+    fun taskNext(t: Store.TaskReminder, now: Long): Long? {
+        if (t.repeatDaily) {
+            val c = Calendar.getInstance()
+            c.timeInMillis = t.at
+            return nextDaily("${c.get(Calendar.HOUR_OF_DAY)}:${c.get(Calendar.MINUTE)}", now)
+        }
+        return if (!t.done && t.at > now + 1000) t.at else null
     }
 
     private fun set(ctx: Context, request: Int, kind: String, id: Long, at: Long?) {
@@ -75,6 +99,38 @@ object AlarmScheduler {
         c.set(Calendar.MILLISECOND, 0)
         if (c.timeInMillis <= now + 1000) c.add(Calendar.DAY_OF_MONTH, 1)
         return c.timeInMillis
+    }
+
+    /**
+     * Next reminder slot. [every] = 0 (or no [until]): once a day at [start].
+     * Otherwise every [every] minutes from [start] to [until] (inclusive), today or tomorrow.
+     */
+    fun nextSlot(start: String, until: String?, every: Int, now: Long): Long {
+        val slots = slotMinutes(start, until, every) ?: return nextDaily(start, now)
+        for (dayOffset in 0..1) {
+            for (min in slots) {
+                val c = Calendar.getInstance()
+                c.timeInMillis = now
+                c.add(Calendar.DAY_OF_MONTH, dayOffset)
+                c.set(Calendar.HOUR_OF_DAY, min / 60)
+                c.set(Calendar.MINUTE, min % 60)
+                c.set(Calendar.SECOND, 0)
+                c.set(Calendar.MILLISECOND, 0)
+                if (c.timeInMillis > now + 1000) return c.timeInMillis
+            }
+        }
+        return nextDaily(start, now)
+    }
+
+    /** Minutes after midnight of each interval reminder, or null for a single daily reminder. */
+    fun slotMinutes(start: String, until: String?, every: Int): List<Int>? {
+        if (every <= 0 || until == null) return null
+        val (sh, sm) = parse(start)
+        val (eh, em) = parse(until)
+        val from = sh * 60 + sm
+        val to = eh * 60 + em
+        if (to <= from) return null
+        return (from..to step every.coerceAtLeast(15)).toList()
     }
 
     private fun nextSunday(now: Long): Long {

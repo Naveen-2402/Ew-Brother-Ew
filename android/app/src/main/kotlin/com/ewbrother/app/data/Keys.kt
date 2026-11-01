@@ -36,6 +36,7 @@ object Keys {
     const val THEME = "theme" // dark | light | system
     const val EXTRA_REEL_IDS = "extra_reel_ids" // JSON array of view ids added by the user
     const val ALARM_HABIT_IDS = "alarm_habit_ids" // JSON array, internal
+    const val ALARM_TASK_IDS = "alarm_task_ids" // JSON array, internal
     const val LAST_PRUNE_DAY = "last_prune_day" // internal
 
     const val DEFAULT_MESSAGES =
@@ -77,6 +78,7 @@ object Keys {
         THEME to "dark",
         EXTRA_REEL_IDS to "[]",
         ALARM_HABIT_IDS to "[]",
+        ALARM_TASK_IDS to "[]",
         LAST_PRUNE_DAY to "",
     )
 }

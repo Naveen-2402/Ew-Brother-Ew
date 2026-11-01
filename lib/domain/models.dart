@@ -12,6 +12,7 @@ class Task {
     required this.createdAt,
     required this.doneAt,
     required this.position,
+    this.remindAt,
   });
 
   factory Task.fromRow(Map<String, Object?> r) => Task(
@@ -23,6 +24,7 @@ class Task {
         createdAt: DateTime.fromMillisecondsSinceEpoch(r['created_at'] as int),
         doneAt: r['done_at'] == null ? null : DateTime.fromMillisecondsSinceEpoch(r['done_at'] as int),
         position: r['position'] as int,
+        remindAt: r['remind_at'] == null ? null : DateTime.fromMillisecondsSinceEpoch(r['remind_at'] as int),
       );
 
   final int id;
@@ -34,6 +36,9 @@ class Task {
   final DateTime? doneAt;
   final int position;
 
+  /// Reminder time. Repeat-daily tasks are reminded every day at its time of day.
+  final DateTime? remindAt;
+
   Map<String, Object?> toRow() => {
         'id': id,
         'title': title,
@@ -43,6 +48,7 @@ class Task {
         'created_at': createdAt.millisecondsSinceEpoch,
         'done_at': doneAt?.millisecondsSinceEpoch,
         'position': position,
+        'remind_at': remindAt?.millisecondsSinceEpoch,
       };
 }
 
@@ -54,6 +60,10 @@ class Habit {
     required this.reminderTime,
     required this.isActive,
     required this.position,
+    this.target = 1,
+    this.remindEvery = 0,
+    this.remindUntil,
+    this.createdAt,
   });
 
   factory Habit.fromRow(Map<String, Object?> r) => Habit(
@@ -63,16 +73,33 @@ class Habit {
         reminderTime: r['reminder_time'] as String?,
         isActive: r['is_active'] == 1,
         position: r['position'] as int,
+        target: ((r['target'] as int?) ?? 1).clamp(1, 99),
+        remindEvery: (r['remind_every'] as int?) ?? 0,
+        remindUntil: r['remind_until'] as String?,
+        createdAt: r['created_at'] == null ? null : DateTime.fromMillisecondsSinceEpoch(r['created_at'] as int),
       );
 
   final int id;
   final String name;
   final String icon;
 
-  /// "HH:mm" or null.
+  /// "HH:mm" or null. With [remindEvery] > 0 this is where the reminder range starts.
   final String? reminderTime;
   final bool isActive;
   final int position;
+
+  /// Times per day (1 = a plain yes/no habit, 8 = e.g. 8 glasses of water).
+  final int target;
+
+  /// Minutes between reminders, 0 = one reminder at [reminderTime].
+  final int remindEvery;
+
+  /// "HH:mm" end of the reminder range when [remindEvery] > 0.
+  final String? remindUntil;
+  final DateTime? createdAt;
+
+  bool get multi => target > 1;
+  bool get interval => reminderTime != null && remindEvery > 0 && remindUntil != null;
 }
 
 class HabitStatus {
@@ -81,6 +108,12 @@ class HabitStatus {
     required this.doneToday,
     required this.streak,
     required this.last7,
+    this.count = 0,
+    this.bestStreak = 0,
+    this.doneLast30 = 0,
+    this.daysLast30 = 1,
+    this.totalDone = 0,
+    this.doneDays = const {},
   });
 
   final Habit habit;
@@ -89,6 +122,24 @@ class HabitStatus {
 
   /// Oldest first, today last.
   final List<bool> last7;
+
+  /// Times done today (for habits done several times a day).
+  final int count;
+
+  /// Longest run of done days (within the last 400 days).
+  final int bestStreak;
+
+  /// Done days in the last 30 days, out of [daysLast30] (fewer when the habit is newer).
+  final int doneLast30;
+  final int daysLast30;
+
+  /// All done days ever.
+  final int totalDone;
+
+  /// Day keys done (last 400 days), for the calendar.
+  final Set<String> doneDays;
+
+  int get rate30 => daysLast30 <= 0 ? 0 : (doneLast30 * 100 / daysLast30).round();
 }
 
 class ReelDay {

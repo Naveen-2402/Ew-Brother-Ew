@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../../core/format.dart';
 import '../../../domain/models.dart';
 import '../../core/theme.dart';
 import '../../core/widgets/common.dart';
@@ -200,12 +201,41 @@ class _TaskTile extends StatelessWidget {
                           decorationColor: c.muted,
                         ),
                       ),
-                      if (task.repeatDaily)
-                        Row(
+                      if (task.repeatDaily || task.remindAt != null)
+                        Wrap(
+                          spacing: 12,
                           children: [
-                            Icon(Icons.repeat_rounded, size: 14, color: c.muted),
-                            const SizedBox(width: 4),
-                            Text('Daily', style: context.type.bodySmall),
+                            if (task.repeatDaily)
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.repeat_rounded, size: 14, color: c.muted),
+                                  const SizedBox(width: 4),
+                                  Text('Daily', style: context.type.bodySmall),
+                                ],
+                              ),
+                            if (task.remindAt != null)
+                              () {
+                                final passed = !task.repeatDaily && task.remindAt!.isBefore(DateTime.now());
+                                final tone = passed || task.isDone ? c.muted : c.warn;
+                                return Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      passed ? Icons.notifications_none_rounded : Icons.notifications_active_outlined,
+                                      size: 14,
+                                      color: tone,
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      task.repeatDaily
+                                          ? formatClock('${task.remindAt!.hour}:${twoDigits(task.remindAt!.minute)}')
+                                          : formatReminder(task.remindAt!, daily: false),
+                                      style: context.type.bodySmall?.copyWith(color: tone),
+                                    ),
+                                  ],
+                                );
+                              }(),
                           ],
                         ),
                     ],
@@ -235,6 +265,7 @@ class _QuickAddBarState extends State<_QuickAddBar> {
   final _focus = FocusNode();
   bool _repeat = false;
   bool _top = false;
+  DateTime? _remindAt;
 
   @override
   void dispose() {
@@ -247,12 +278,25 @@ class _QuickAddBarState extends State<_QuickAddBar> {
     final t = _text.text.trim();
     if (t.isEmpty) return;
     _text.clear();
-    final starred = await widget.vm.add(t, repeat: _repeat, top: _top);
+    final starred = await widget.vm.add(t, repeat: _repeat, top: _top, remindAt: _remindAt);
     if (!mounted) return;
     tickHaptic();
     if (!starred) showSnack(context, 'Only 3 can be starred. Added without a star.');
-    setState(() => _top = false);
+    // Star and reminder are per task; "repeat daily" stays on for a run of daily tasks.
+    setState(() {
+      _top = false;
+      _remindAt = null;
+    });
     _focus.requestFocus(); // keep the keyboard up for the next one
+  }
+
+  Future<void> _toggleRemind() async {
+    if (_remindAt != null) {
+      setState(() => _remindAt = null);
+      return;
+    }
+    final at = await pickTaskReminder(context, daily: _repeat);
+    if (at != null && mounted) setState(() => _remindAt = at);
   }
 
   @override
@@ -307,6 +351,15 @@ class _QuickAddBarState extends State<_QuickAddBar> {
                 color: c.warn,
                 onTap: () => setState(() => _top = !_top),
               ),
+              const SizedBox(width: 8),
+              Flexible(
+                child: _Flag(
+                  label: _remindAt == null ? 'Remind' : formatReminder(_remindAt!, daily: _repeat),
+                  on: _remindAt != null,
+                  color: c.shorts,
+                  onTap: _toggleRemind,
+                ),
+              ),
             ],
           ),
         ],
@@ -350,7 +403,14 @@ class _Flag extends StatelessWidget {
                 Icon(Icons.check_rounded, size: 16, color: color),
                 const SizedBox(width: 4),
               ],
-              Text(label, style: context.type.labelMedium?.copyWith(color: on ? color : c.muted)),
+              Flexible(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: context.type.labelMedium?.copyWith(color: on ? color : c.muted),
+                ),
+              ),
             ],
           ),
         ),

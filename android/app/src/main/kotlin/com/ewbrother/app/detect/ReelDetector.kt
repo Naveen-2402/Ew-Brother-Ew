@@ -28,6 +28,7 @@ class ReelDetector(private val screenSize: () -> Pair<Int, Int>) {
 
     private val sessions = HashMap<String, Session>()
     private val heuristicCache = HashMap<Int, Boolean>()
+    private val heuristicMissUntil = HashMap<Int, Long>()
 
     /** View IDs added by the user in Settings > Detection check (no rebuild needed). */
     @Volatile
@@ -97,27 +98,42 @@ class ReelDetector(private val screenSize: () -> Pair<Int, Int>) {
         return Result(true, 1)
     }
 
-    /** Full-screen vertical pager: the container and its first page both fill the screen. */
+    /**
+     * Full-screen vertical pager: the container and one of its visible pages fill the screen.
+     * Pagers keep the previous page as child 0 (scrolled off-screen), so the first few children
+     * are checked. Only a "yes" is cached for good; a "no" is re-checked after a moment, because
+     * it may have been taken mid-swipe or while the feed was still loading.
+     */
     private fun looksLikeReelPager(key: Int, node: AccessibilityNodeInfo): Boolean {
-        heuristicCache[key]?.let { return it }
+        heuristicCache[key]?.let { return true }
+        val now = System.currentTimeMillis()
+        if ((heuristicMissUntil[key] ?: 0L) > now) return false
         val cls = node.className?.toString() ?: ""
         var result = false
         if (cls.contains("ViewPager") || cls.contains("RecyclerView")) {
             val (w, h) = screenSize()
             val r = Rect()
             node.getBoundsInScreen(r)
-            if (r.height() >= h * DetectionRules.FULLSCREEN_RATIO && node.childCount > 0) {
-                val child = node.getChild(0)
-                if (child != null) {
-                    val cr = Rect()
+            if (r.height() >= h * DetectionRules.FULLSCREEN_RATIO) {
+                val cr = Rect()
+                for (i in 0 until minOf(node.childCount, 3)) {
+                    val child = node.getChild(i) ?: continue
                     child.getBoundsInScreen(cr)
-                    result = cr.height() >= h * DetectionRules.FULLSCREEN_RATIO &&
-                        cr.width() >= w * 0.9f
+                    if (cr.height() >= h * DetectionRules.FULLSCREEN_RATIO && cr.width() >= w * 0.9f) {
+                        result = true
+                        break
+                    }
                 }
             }
         }
         if (heuristicCache.size > 64) heuristicCache.clear()
-        heuristicCache[key] = result
+        if (heuristicMissUntil.size > 64) heuristicMissUntil.clear()
+        if (result) {
+            heuristicCache[key] = true
+            heuristicMissUntil.remove(key)
+        } else {
+            heuristicMissUntil[key] = now + 2_000L
+        }
         return result
     }
 

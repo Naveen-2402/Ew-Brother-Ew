@@ -65,5 +65,14 @@ void main() {
       expect(prev.first, '2026-10-19');
       expect(prev.length, 7);
     });
+
+    test('task reminder labels', () {
+      final now = DateTime(2026, 11, 1, 10);
+      expect(formatReminder(DateTime(2026, 11, 1, 18, 30), daily: false, now: now), 'Today 6:30 PM');
+      expect(formatReminder(DateTime(2026, 11, 2, 9, 5), daily: false, now: now), 'Tomorrow 9:05 AM');
+      expect(formatReminder(DateTime(2026, 11, 12, 9), daily: false, now: now), '12 Nov, 9:00 AM');
+      expect(formatReminder(DateTime(2027, 1, 3, 0, 15), daily: false, now: now), '3 Jan 2027, 12:15 AM');
+      expect(formatReminder(DateTime(2026, 10, 1, 7), daily: true, now: now), 'Daily 7:00 AM');
+    });
   });
 }

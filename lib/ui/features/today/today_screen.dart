@@ -474,8 +474,16 @@ class _HabitChip extends StatelessWidget {
                 status.habit.name,
                 style: context.type.labelLarge?.copyWith(color: done ? c.muted : c.text),
               ),
+              if (status.habit.multi) ...[
+                const SizedBox(width: 8),
+                Text(
+                  '${status.count}/${status.habit.target}',
+                  style: ewText(13.5, 700, width: 82, color: done ? c.good : c.muted),
+                ),
+              ],
               if (status.streak > 1) ...[
                 const SizedBox(width: 8),
+                Icon(Icons.local_fire_department_rounded, size: 15, color: c.warn),
                 Text('${status.streak}', style: ewText(15, 760, width: 80, color: c.warn)),
               ],
             ],

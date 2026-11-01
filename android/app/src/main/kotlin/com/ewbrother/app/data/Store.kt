@@ -161,7 +161,8 @@ class Store(context: Context) {
             .use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
 
     fun setTaskDone(id: Long, now: Long) {
-        db.execSQL("UPDATE tasks SET is_done = 1, done_at = ? WHERE id = ?", arrayOf<Any>(now, id))
+        // Only open tasks: an old notification's "Done" must not move the finish time of a done task.
+        db.execSQL("UPDATE tasks SET is_done = 1, done_at = ? WHERE id = ? AND is_done = 0", arrayOf<Any>(now, id))
     }
 
     fun tasksDoneBetween(start: Long, end: Long): Int =
@@ -172,12 +173,29 @@ class Store(context: Context) {
 
     // ---------- habits ----------
 
-    data class HabitItem(val id: Long, val name: String, val done: Boolean, val reminder: String?)
+    /**
+     * [target] = times per day (1 = a plain yes/no habit), [count] = times done today.
+     * Reminders: one at [reminder] when [every] is 0, otherwise every [every] minutes
+     * from [reminder] to [until].
+     */
+    data class HabitItem(
+        val id: Long,
+        val name: String,
+        val done: Boolean,
+        val reminder: String?,
+        val target: Int = 1,
+        val count: Int = 0,
+        val every: Int = 0,
+        val until: String? = null,
+    ) {
+        val multi: Boolean get() = target > 1
+    }
 
     fun habitsToday(day: String): List<HabitItem> {
         val out = ArrayList<HabitItem>()
         db.rawQuery(
-            "SELECT h.id, h.name, COALESCE(l.done, 0), h.reminder_time FROM habits h " +
+            "SELECT h.id, h.name, COALESCE(l.done, 0), h.reminder_time, h.target, COALESCE(l.count, 0), " +
+                "h.remind_every, h.remind_until FROM habits h " +
                 "LEFT JOIN habit_logs l ON l.habit_id = h.id AND l.date = ? " +
                 "WHERE h.is_active = 1 ORDER BY h.position ASC, h.id ASC",
             arrayOf(day),
@@ -185,10 +203,14 @@ class Store(context: Context) {
             while (c.moveToNext()) {
                 out.add(
                     HabitItem(
-                        c.getLong(0),
-                        c.getString(1),
-                        c.getInt(2) == 1,
-                        if (c.isNull(3)) null else c.getString(3),
+                        id = c.getLong(0),
+                        name = c.getString(1),
+                        done = c.getInt(2) == 1,
+                        reminder = if (c.isNull(3)) null else c.getString(3),
+                        target = c.getInt(4).coerceAtLeast(1),
+                        count = c.getInt(5),
+                        every = c.getInt(6),
+                        until = if (c.isNull(7)) null else c.getString(7),
                     )
                 )
             }
@@ -196,14 +218,69 @@ class Store(context: Context) {
         return out
     }
 
+    /** Ticks a habit fully done (count = target) or clears it. */
     fun setHabitDone(id: Long, day: String, done: Boolean) {
         // Only for habits that still exist (an old notification may point to a deleted one).
         db.execSQL(
-            "INSERT OR REPLACE INTO habit_logs(habit_id, date, done) " +
-                "SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM habits WHERE id = ? AND is_active = 1)",
-            arrayOf<Any>(id, day, if (done) 1 else 0, id),
+            "INSERT OR REPLACE INTO habit_logs(habit_id, date, done, count) " +
+                "SELECT id, ?, ?, CASE WHEN ? = 1 THEN target ELSE 0 END FROM habits WHERE id = ? AND is_active = 1",
+            arrayOf<Any>(day, if (done) 1 else 0, if (done) 1 else 0, id),
         )
     }
+
+    /**
+     * One more (or one less) for a habit done several times a day. Done as soon as the
+     * count reaches the target, however the ticks were spread over the day.
+     * [cap] stops at the target (widget and notifications, where a stray tap can't be undone).
+     */
+    fun addHabitCount(id: Long, day: String, delta: Int, cap: Boolean = false) {
+        val d = db
+        d.beginTransaction()
+        try {
+            val target = d.rawQuery("SELECT target FROM habits WHERE id = ? AND is_active = 1", arrayOf(id.toString()))
+                .use { c -> if (c.moveToFirst()) c.getInt(0).coerceAtLeast(1) else null } ?: return
+            val current = d.rawQuery(
+                "SELECT count FROM habit_logs WHERE habit_id = ? AND date = ?",
+                arrayOf(id.toString(), day),
+            ).use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
+            var next = (current + delta).coerceAtLeast(0)
+            if (cap && delta > 0) next = minOf(next, maxOf(target, current))
+            d.execSQL(
+                "INSERT OR REPLACE INTO habit_logs(habit_id, date, done, count) VALUES (?, ?, ?, ?)",
+                arrayOf<Any>(id, day, if (next >= target) 1 else 0, next),
+            )
+            d.setTransactionSuccessful()
+        } finally {
+            d.endTransaction()
+        }
+    }
+
+    // ---------- task reminders ----------
+
+    data class TaskReminder(val id: Long, val title: String, val at: Long, val repeatDaily: Boolean, val done: Boolean)
+
+    /** Every task with a reminder: open ones, plus done repeat-daily ones (they come back tomorrow). */
+    fun taskReminders(): List<TaskReminder> {
+        val out = ArrayList<TaskReminder>()
+        db.rawQuery(
+            "SELECT id, title, remind_at, repeat_daily, is_done FROM tasks " +
+                "WHERE remind_at IS NOT NULL AND (is_done = 0 OR repeat_daily = 1)",
+            null,
+        ).use { c ->
+            while (c.moveToNext()) {
+                out.add(TaskReminder(c.getLong(0), c.getString(1), c.getLong(2), c.getInt(3) == 1, c.getInt(4) == 1))
+            }
+        }
+        return out
+    }
+
+    fun taskReminder(id: Long): TaskReminder? =
+        db.rawQuery(
+            "SELECT id, title, remind_at, repeat_daily, is_done FROM tasks WHERE id = ? AND remind_at IS NOT NULL",
+            arrayOf(id.toString()),
+        ).use { c ->
+            if (c.moveToFirst()) TaskReminder(c.getLong(0), c.getString(1), c.getLong(2), c.getInt(3) == 1, c.getInt(4) == 1) else null
+        }
 
     fun habitDoneCountBetween(fromDay: String, toDay: String): Int =
         db.rawQuery(

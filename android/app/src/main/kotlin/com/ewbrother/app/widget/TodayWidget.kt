@@ -89,7 +89,12 @@ class TodayWidget : AppWidgetProvider() {
                     v.setViewVisibility(viewId, View.GONE)
                 } else {
                     v.setViewVisibility(viewId, View.VISIBLE)
-                    v.setTextViewText(viewId, if (h.done) "✓ ${h.name}" else h.name)
+                    val label = when {
+                        h.done -> "✓ ${h.name}"
+                        h.multi -> "${h.name} ${h.count}/${h.target}"
+                        else -> h.name
+                    }
+                    v.setTextViewText(viewId, label)
                     v.setTextColor(viewId, if (h.done) OverlayStyle.BRINJAL else OverlayStyle.CHALK)
                     v.setInt(
                         viewId,

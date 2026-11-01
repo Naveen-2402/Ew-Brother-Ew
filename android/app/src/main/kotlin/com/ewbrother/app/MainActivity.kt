@@ -12,6 +12,7 @@ import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
 import com.ewbrother.app.data.EwDatabase
+import com.ewbrother.app.data.Keys
 import com.ewbrother.app.data.Store
 import com.ewbrother.app.notify.AlarmScheduler
 import com.ewbrother.app.notify.Notifier
@@ -72,12 +73,30 @@ class MainActivity : FlutterActivity() {
                 }
                 result.success(true)
             }
+            "openNotificationSettings" -> {
+                val settings = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                    .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+                result.success(open(settings) || open(appDetails()))
+            }
             "openBattery" -> {
+                // "unrestricted": Android's one-tap "allow" dialog while still restricted.
+                // Otherwise (or "saver"): the page where you pick the mode yourself; on HyperOS that's
+                // the per-app battery saver page (No restrictions / Battery saver / Restrict).
+                val mode = call.argument<String>("mode") ?: "unrestricted"
+                val pm = getSystemService(PowerManager::class.java)!!
                 val direct = Intent(
                     Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
                     Uri.parse("package:$packageName"),
                 )
-                result.success(open(direct) || open(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)))
+                val miui = Intent()
+                    .setComponent(ComponentName("com.miui.powerkeeper", "com.miui.powerkeeper.ui.HiddenAppsConfigActivity"))
+                    .putExtra("package_name", packageName)
+                    .putExtra("package_label", "Ew Brother Ew")
+                val opened = (mode == "unrestricted" && !pm.isIgnoringBatteryOptimizations(packageName) && open(direct)) ||
+                    open(miui) ||
+                    open(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) ||
+                    open(appDetails())
+                result.success(opened)
             }
             "openAutostart" -> {
                 val miui = Intent().setComponent(
@@ -100,6 +119,12 @@ class MainActivity : FlutterActivity() {
             }
             "dataChanged" -> {
                 Store.runIo {
+                    // A task finished or deleted in the app: take down its reminder if it's showing.
+                    val store = Store(this)
+                    Store.jsonList(store.get(Keys.ALARM_TASK_IDS)).mapNotNull { it.toLongOrNull() }.forEach { id ->
+                        val t = store.taskReminder(id)
+                        if (t == null || t.done) Notifier.cancel(this, Notifier.ID_TASK_BASE + id.toInt())
+                    }
                     TodayWidget.updateAll(this)
                     AlarmScheduler.scheduleAll(this)
                 }

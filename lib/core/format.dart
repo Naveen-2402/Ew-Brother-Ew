@@ -25,6 +25,19 @@ String formatClock(String hhmm) {
 
 String twoDigits(int v) => v.toString().padLeft(2, '0');
 
+/// Task reminder: "Daily 6:30 PM", "Today 6:30 PM", "Tomorrow 9:00 AM", "12 Nov, 9:00 AM".
+String formatReminder(DateTime at, {required bool daily, DateTime? now}) {
+  final clock = formatClock('${at.hour}:${twoDigits(at.minute)}');
+  if (daily) return 'Daily $clock';
+  final n = now ?? DateTime.now();
+  // UTC dates: a 23-hour daylight-saving day would otherwise count as 0 days.
+  final days = DateTime.utc(at.year, at.month, at.day).difference(DateTime.utc(n.year, n.month, n.day)).inDays;
+  if (days == 0) return 'Today $clock';
+  if (days == 1) return 'Tomorrow $clock';
+  final date = '${at.day} ${monthShort[at.month - 1]}${at.year == n.year ? '' : ' ${at.year}'}';
+  return '$date, $clock';
+}
+
 const weekdayShort = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const weekdayLong = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 const monthLong = [

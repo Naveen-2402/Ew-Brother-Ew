@@ -127,7 +127,11 @@ class TodayViewModel extends ChangeNotifier {
 
   Future<void> toggleHabit(HabitStatus h) async {
     tickHaptic();
-    await habits.setDone(h.habit.id, app.today, !h.doneToday);
+    if (h.habit.multi) {
+      await habits.addCount(h.habit.id, app.today, 1);
+    } else {
+      await habits.setDone(h.habit.id, app.today, !h.doneToday);
+    }
   }
 
   Future<void> setMonitor(bool on) => app.setFlag(SettingsKeys.monitorOn, on);

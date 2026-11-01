@@ -68,7 +68,11 @@ class NativeBridge {
   Future<void> openAccessibility() => _call('openAccessibility');
   Future<void> openUsageAccess() => _call('openUsageAccess');
   Future<void> requestNotifications() => _call('requestNotifications');
-  Future<void> openBattery() => _call('openBattery');
+  Future<void> openNotificationSettings() => _call('openNotificationSettings');
+
+  /// [unrestricted]: ask for "No restrictions". false: open the page to pick "Battery saver".
+  Future<void> openBattery({bool unrestricted = true}) =>
+      _call('openBattery', {'mode': unrestricted ? 'unrestricted' : 'saver'});
   Future<void> openAutostart() => _call('openAutostart');
   Future<void> openAppDetails() => _call('openAppDetails');
 
@@ -140,9 +144,9 @@ class NativeBridge {
   Future<String> importBackup() async =>
       await _channel.invokeMethod<String>('importBackup') ?? 'cancelled';
 
-  Future<void> _call(String method) async {
+  Future<void> _call(String method, [Map<String, Object?>? args]) async {
     try {
-      await _channel.invokeMethod<void>(method);
+      await _channel.invokeMethod<void>(method, args);
     } on PlatformException {
       // Native side unavailable; nothing useful to do.
     }

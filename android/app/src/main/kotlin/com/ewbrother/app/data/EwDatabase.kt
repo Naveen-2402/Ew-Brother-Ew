@@ -42,6 +42,7 @@ class EwDatabase private constructor(context: Context) :
             when (v) {
                 1 -> createV1(db)
                 2 -> createV2TaskLog(db)
+                3 -> createV3Counts(db)
             }
         }
     }
@@ -165,6 +166,32 @@ class EwDatabase private constructor(context: Context) :
         )
     }
 
+    /**
+     * v3: habits done several times a day, interval reminders, task reminders.
+     * habit_logs.done stays the source of truth for streaks and stats (set to count >= target
+     * when the tick is made), so every older query keeps working unchanged.
+     */
+    private fun createV3Counts(db: SQLiteDatabase) {
+        addColumn(db, "habits", "target", "INTEGER NOT NULL DEFAULT 1")
+        // Minutes between reminders; 0 = one reminder at reminder_time.
+        addColumn(db, "habits", "remind_every", "INTEGER NOT NULL DEFAULT 0")
+        // End of the reminder range ("HH:mm"); the range starts at reminder_time.
+        addColumn(db, "habits", "remind_until", "TEXT")
+        addColumn(db, "habit_logs", "count", "INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("UPDATE habit_logs SET count = 1 WHERE done = 1 AND count = 0")
+        // Epoch ms. Repeat-daily tasks use only its time of day.
+        addColumn(db, "tasks", "remind_at", "INTEGER")
+    }
+
+    private fun addColumn(db: SQLiteDatabase, table: String, column: String, type: String) {
+        val exists = db.rawQuery("PRAGMA table_info($table)", null).use { c ->
+            var found = false
+            while (c.moveToNext()) if (c.getString(1) == column) found = true
+            found
+        }
+        if (!exists) db.execSQL("ALTER TABLE $table ADD COLUMN $column $type")
+    }
+
     private fun insertDefaultSettings(db: SQLiteDatabase) {
         for ((k, v) in Keys.DEFAULTS) {
             db.execSQL("INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)", arrayOf(k, v))
@@ -173,7 +200,7 @@ class EwDatabase private constructor(context: Context) :
 
     companion object {
         const val NAME = "focuspal.db"
-        const val VERSION = 2
+        const val VERSION = 3
 
         @Volatile
         private var instance: EwDatabase? = null

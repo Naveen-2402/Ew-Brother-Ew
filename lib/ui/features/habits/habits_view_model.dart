@@ -51,9 +51,21 @@ class HabitsViewModel extends ChangeNotifier {
     _notify();
   }
 
+  /// Plain habit: tick / untick. Several-times-a-day habit: one more.
   Future<void> toggle(HabitStatus h) async {
     tickHaptic();
-    await repo.setDone(h.habit.id, app.today, !h.doneToday);
+    if (h.habit.multi) {
+      await repo.addCount(h.habit.id, app.today, 1);
+    } else {
+      await repo.setDone(h.habit.id, app.today, !h.doneToday);
+    }
+  }
+
+  /// One less (undo a stray tap on a several-times-a-day habit).
+  Future<void> decrement(HabitStatus h) async {
+    if (h.count <= 0) return;
+    tickHaptic();
+    await repo.addCount(h.habit.id, app.today, -1);
   }
 
   void _notify() {

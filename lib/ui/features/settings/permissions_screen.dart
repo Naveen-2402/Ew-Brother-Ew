@@ -62,19 +62,21 @@ class PermissionsScreen extends StatelessWidget {
           _Step(
             done: p.notifications,
             title: 'Notifications',
-            body: 'Morning top 3, evening habits and the monitor switch.',
-            action: 'Allow',
+            body: 'Morning top 3, evening habits, reminders and the monitor switch.',
+            // Once allowed, the button opens the notification settings (to turn them off or tune them).
+            action: p.notifications ? 'Open' : 'Allow',
             onAction: () async {
-              await b.requestNotifications();
+              if (p.notifications) {
+                await b.openNotificationSettings();
+              } else {
+                await b.requestNotifications();
+              }
               await app.refreshPermissions();
             },
           ),
-          _Step(
-            done: p.battery,
-            title: 'No battery restrictions',
-            body: 'Stops HyperOS from killing the counter in the background.',
-            action: 'Open',
-            onAction: b.openBattery,
+          _BatteryStep(
+            unrestricted: p.battery,
+            onPick: (unrestricted) => b.openBattery(unrestricted: unrestricted),
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 28, 20, 4),
@@ -89,12 +91,6 @@ class PermissionsScreen extends StatelessWidget {
             body: 'Lets the counter come back after a restart.',
             action: 'Open',
             onAction: b.openAutostart,
-          ),
-          _Step(
-            title: 'Battery saver: No restrictions',
-            body: 'App info, Battery saver, No restrictions.',
-            action: 'App info',
-            onAction: b.openAppDetails,
           ),
           _Step(
             title: 'Pop-up windows in background',
@@ -152,13 +148,86 @@ class _Step extends StatelessWidget {
                   ],
                 ),
               ),
-              if (action != null && done != true) ...[
+              // The button stays after the step is done, so the setting can be changed or turned off.
+              if (action != null) ...[
                 const SizedBox(width: 8),
-                FilledButton.tonal(onPressed: onAction, child: Text(action!)),
+                done == true
+                    ? OutlinedButton(onPressed: onAction, child: Text(action!))
+                    : FilledButton.tonal(onPressed: onAction, child: Text(action!)),
               ],
             ],
           ),
           ?extra,
+        ],
+      ),
+    );
+  }
+}
+
+/// Battery mode as two choices. The highlighted one is what Android reports right now;
+/// tapping either opens the system page to switch (apps can't change it themselves).
+class _BatteryStep extends StatelessWidget {
+  const _BatteryStep({required this.unrestricted, required this.onPick});
+
+  final bool unrestricted;
+  final ValueChanged<bool> onPick;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.ew;
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 6, 12, 0),
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+      decoration: BoxDecoration(color: c.surface, borderRadius: BorderRadius.circular(20)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(
+                unrestricted ? Icons.check_circle_rounded : Icons.battery_saver_rounded,
+                color: unrestricted ? c.good : c.warn,
+                size: 28,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Battery', style: context.type.titleMedium),
+                    const SizedBox(height: 2),
+                    Text(
+                      unrestricted
+                          ? 'No restrictions: the counter keeps running in the background.'
+                          : 'Battery saver: HyperOS may stop the counter in the background.',
+                      style: context.type.bodySmall,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: SegmentedButton<bool>(
+              showSelectedIcon: false,
+              segments: const [
+                ButtonSegment(value: true, label: Text('No restrictions'), icon: Icon(Icons.bolt_rounded)),
+                ButtonSegment(value: false, label: Text('Battery saver'), icon: Icon(Icons.eco_outlined)),
+              ],
+              selected: {unrestricted},
+              // Tapping the selected one too: opens the page so it can be checked or changed.
+              emptySelectionAllowed: true,
+              onSelectionChanged: (s) => onPick(s.isEmpty ? unrestricted : s.first),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Opens the system page; pick the same option there. This screen updates when you come back.',
+            style: context.type.bodySmall,
+          ),
         ],
       ),
     );

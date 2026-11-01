@@ -112,7 +112,7 @@ class TasksRepository {
 
   /// Returns false if a star was requested but 3 tasks are already starred
   /// (the task is still added, unstarred).
-  Future<bool> add(String title, {bool repeatDaily = false, bool top = false}) async {
+  Future<bool> add(String title, {bool repeatDaily = false, bool top = false, DateTime? remindAt}) async {
     final t = title.trim();
     if (t.isEmpty) return true;
     final r = await _db.db.rawQuery('SELECT COALESCE(MAX(position), 0) + 1 AS p FROM tasks');
@@ -127,6 +127,7 @@ class TasksRepository {
       'repeat_daily': repeatDaily ? 1 : 0,
       'created_at': DateTime.now().millisecondsSinceEpoch,
       'position': r.first['p'] as int,
+      'remind_at': remindAt?.millisecondsSinceEpoch,
     });
     await _changed();
     return makeTop == top;
@@ -173,12 +174,12 @@ class TasksRepository {
 
   /// Edit sheet: only the fields the sheet shows. Done state, order and star are left alone,
   /// so a tick made meanwhile (e.g. from a notification) is never undone by saving.
-  Future<void> edit(int id, {required String title, required bool repeatDaily}) async {
+  Future<void> edit(int id, {required String title, required bool repeatDaily, DateTime? remindAt}) async {
     final t = title.trim();
     if (t.isEmpty) return;
     await _db.db.update(
       'tasks',
-      {'title': t, 'repeat_daily': repeatDaily ? 1 : 0},
+      {'title': t, 'repeat_daily': repeatDaily ? 1 : 0, 'remind_at': remindAt?.millisecondsSinceEpoch},
       where: 'id = ?',
       whereArgs: [id],
     );
@@ -207,6 +208,26 @@ class TasksRepository {
 }
 
 // ============================================================================ habits
+
+/// How often a habit is done and reminded. [reminder] is the single reminder time, or the
+/// start of the range when [every] > 0 (minutes) and [until] is set.
+class HabitPlan {
+  const HabitPlan({this.target = 1, this.reminder, this.every = 0, this.until});
+
+  final int target;
+  final String? reminder;
+  final int every;
+  final String? until;
+
+  bool get interval => reminder != null && every > 0 && until != null;
+
+  Map<String, Object?> toRow() => {
+        'target': target.clamp(1, 99),
+        'reminder_time': reminder,
+        'remind_every': interval ? every : 0,
+        'remind_until': interval ? until : null,
+      };
+}
 
 class HabitsRepository {
   HabitsRepository(this._db, this._bridge, this._signal);
@@ -237,16 +258,59 @@ class HabitsRepository {
     for (final l in logs) {
       doneDays.putIfAbsent(l['habit_id'] as int, () => <String>{}).add(l['date'] as String);
     }
+    final todayRows = await _db.db.query(
+      'habit_logs',
+      columns: ['habit_id', 'count'],
+      where: 'date = ?',
+      whereArgs: [today],
+    );
+    final counts = {for (final r in todayRows) r['habit_id'] as int: (r['count'] as int?) ?? 0};
+    final totals = await _db.db.rawQuery(
+      'SELECT habit_id, COUNT(*) AS c FROM habit_logs WHERE done = 1 GROUP BY habit_id',
+    );
+    final totalDone = {for (final r in totals) r['habit_id'] as int: r['c'] as int};
     final week = LogicalDay.lastDays(today, 7);
-    return [
-      for (final h in habits)
-        HabitStatus(
-          habit: h,
-          doneToday: doneDays[h.id]?.contains(today) ?? false,
-          streak: _streak(doneDays[h.id] ?? const <String>{}, today),
-          last7: [for (final d in week) doneDays[h.id]?.contains(d) ?? false],
-        ),
-    ];
+    final month = LogicalDay.lastDays(today, 30);
+    final todayDate = LogicalDay.parse(today);
+    final out = <HabitStatus>[];
+    for (final h in habits) {
+      final days = doneDays[h.id] ?? const <String>{};
+      // Days the habit existed within the last 30 (a habit made yesterday has 2, not 30).
+      final created = h.createdAt;
+      final age = created == null
+          ? 30
+          : todayDate.difference(DateTime(created.year, created.month, created.day)).inDays + 1;
+      out.add(HabitStatus(
+        habit: h,
+        doneToday: days.contains(today),
+        streak: _streak(days, today),
+        last7: [for (final d in week) days.contains(d)],
+        count: counts[h.id] ?? 0,
+        bestStreak: _best(days),
+        doneLast30: month.where(days.contains).length,
+        daysLast30: age.clamp(1, 30),
+        totalDone: totalDone[h.id] ?? 0,
+        doneDays: days,
+      ));
+    }
+    return out;
+  }
+
+  /// Longest run of consecutive done days.
+  static int _best(Set<String> days) {
+    var best = 0;
+    for (final d in days) {
+      // Only count from the first day of each run.
+      if (days.contains(LogicalDay.minusDays(d, 1))) continue;
+      var n = 1;
+      var next = LogicalDay.minusDays(d, -1);
+      while (days.contains(next)) {
+        n++;
+        next = LogicalDay.minusDays(next, -1);
+      }
+      if (n > best) best = n;
+    }
+    return best;
   }
 
   /// Consecutive days ending today; if today isn't ticked yet, ending yesterday.
@@ -260,23 +324,48 @@ class HabitsRepository {
     return n;
   }
 
+  /// Plain habit: done or not. Done sets the count to the target, undone to 0.
   Future<void> setDone(int habitId, String day, bool done) async {
-    await _db.db.insert(
-      'habit_logs',
-      {'habit_id': habitId, 'date': day, 'done': done ? 1 : 0},
-      conflictAlgorithm: ConflictAlgorithm.replace,
+    await _db.db.rawInsert(
+      'INSERT OR REPLACE INTO habit_logs(habit_id, date, done, count) '
+      'SELECT id, ?, ?, CASE WHEN ? = 1 THEN target ELSE 0 END FROM habits WHERE id = ?',
+      [day, done ? 1 : 0, done ? 1 : 0, habitId],
     );
     await _changed();
   }
 
-  Future<void> add(String name, String icon, String? reminder) async {
+  /// Several times a day: one more (or one less). Done once the count reaches the target,
+  /// however the ticks were spread over the day, so the streak only needs the total.
+  Future<void> addCount(int habitId, String day, int delta) async {
+    await _db.db.transaction((txn) async {
+      final h = await txn.query('habits', columns: ['target'], where: 'id = ?', whereArgs: [habitId]);
+      if (h.isEmpty) return;
+      final target = ((h.first['target'] as int?) ?? 1).clamp(1, 99);
+      final cur = await txn.query(
+        'habit_logs',
+        columns: ['count'],
+        where: 'habit_id = ? AND date = ?',
+        whereArgs: [habitId, day],
+      );
+      final now = cur.isEmpty ? 0 : ((cur.first['count'] as int?) ?? 0);
+      final next = (now + delta).clamp(0, 999);
+      await txn.insert(
+        'habit_logs',
+        {'habit_id': habitId, 'date': day, 'done': next >= target ? 1 : 0, 'count': next},
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    });
+    await _changed();
+  }
+
+  Future<void> add(String name, String icon, HabitPlan plan) async {
     final n = name.trim();
     if (n.isEmpty) return;
     final r = await _db.db.rawQuery('SELECT COALESCE(MAX(position), 0) + 1 AS p FROM habits');
     await _db.db.insert('habits', {
       'name': n,
       'icon': icon,
-      'reminder_time': reminder,
+      ...plan.toRow(),
       'is_active': 1,
       'created_at': DateTime.now().millisecondsSinceEpoch,
       'position': r.first['p'] as int,
@@ -284,13 +373,20 @@ class HabitsRepository {
     await _changed();
   }
 
-  Future<void> update(int id, String name, String icon, String? reminder) async {
-    await _db.db.update(
-      'habits',
-      {'name': name.trim(), 'icon': icon, 'reminder_time': reminder},
-      where: 'id = ?',
-      whereArgs: [id],
-    );
+  /// A changed target re-decides today only; past days keep what they were, so streaks hold.
+  Future<void> update(int id, String name, String icon, HabitPlan plan, {required String today}) async {
+    await _db.db.transaction((txn) async {
+      await txn.update(
+        'habits',
+        {'name': name.trim(), 'icon': icon, ...plan.toRow()},
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+      await txn.rawUpdate(
+        'UPDATE habit_logs SET done = CASE WHEN count >= ? THEN 1 ELSE 0 END WHERE habit_id = ? AND date = ?',
+        [plan.target.clamp(1, 99), id, today],
+      );
+    });
     await _changed();
   }
 

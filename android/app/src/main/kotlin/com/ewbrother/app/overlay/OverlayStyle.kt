@@ -24,6 +24,8 @@ object OverlayStyle {
     val HALDI = Color.parseColor("#FFB547")
     val CHILLI = Color.parseColor("#FF5E57")
     val TONGUE = Color.parseColor("#F58BB0")
+    val SKY = Color.parseColor("#8EC9FF")
+    val TEXT_MUTED_APP = Color.parseColor("#A99DB5")
 
     private const val FONT = "flutter_assets/assets/fonts/BricolageGrotesque.ttf"
     private val cache = HashMap<String, Typeface>()

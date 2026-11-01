@@ -29,6 +29,8 @@ object Notifier {
     const val ID_EVENING = 3
     const val ID_WEEKLY = 4
     const val ID_HABIT_BASE = 1000
+    const val ID_TASK_BASE = 2_000_000
+    private const val REQ_TASK_DONE_BASE = 3_000_000
 
     fun ensureChannels(ctx: Context) {
         val nm = ctx.getSystemService(NotificationManager::class.java)!!
@@ -154,12 +156,13 @@ object Notifier {
             return
         }
         ensureChannels(ctx)
+        fun line(h: Store.HabitItem) = if (h.multi) "${h.name} ${h.count}/${h.target}" else h.name
         val style = Notification.InboxStyle()
-        left.forEach { style.addLine(it.name) }
+        left.forEach { style.addLine(line(it)) }
         val b = Notification.Builder(ctx, CH_REMIND)
             .setSmallIcon(R.drawable.ic_notif)
             .setContentTitle(if (left.size == 1) "1 habit left today" else "${left.size} habits left today")
-            .setContentText(left.joinToString(", ") { it.name })
+            .setContentText(left.joinToString(", ") { line(it) })
             .setStyle(style)
             .setContentIntent(openApp(ctx))
             .setOnlyAlertOnce(true)
@@ -168,7 +171,7 @@ object Notifier {
             b.addAction(
                 action(
                     ctx,
-                    "Done: ${short(h.name, 14)}",
+                    if (h.multi) "+1 ${short(h.name, 14)}" else "Done: ${short(h.name, 14)}",
                     broadcast(ctx, ActionReceiver.ACTION_TICK_HABIT, 40 + i, h.id, ActionReceiver.SRC_EVENING),
                 )
             )
@@ -178,27 +181,81 @@ object Notifier {
 
     // ---------- single habit reminder ----------
 
-    fun postHabit(ctx: Context, habitId: Long) {
+    /**
+     * [fromAlarm]: a scheduled reminder. Interval reminders stay quiet when you're on track
+     * (count already at what this point of the range asks for), so a missed slot that you
+     * made up for never nags. Re-posts after "+1" use fromAlarm = false and always update.
+     */
+    fun postHabit(ctx: Context, habitId: Long, fromAlarm: Boolean = true) {
         if (!canPost(ctx)) return
         val store = Store(ctx)
         val h = store.habitsToday(store.today()).firstOrNull { it.id == habitId } ?: return
-        if (h.done) return
+        if (h.done) {
+            nm(ctx).cancel(ID_HABIT_BASE + habitId.toInt())
+            return
+        }
+        if (fromAlarm && h.multi && onTrack(h)) return
         ensureChannels(ctx)
+        val text = if (h.multi) {
+            val left = h.target - h.count
+            "${h.count} of ${h.target} today, $left to go. Tap +1 each time."
+        } else {
+            "Tick it when it's done."
+        }
         val n = Notification.Builder(ctx, CH_REMIND)
             .setSmallIcon(R.drawable.ic_notif)
             .setContentTitle("Time for ${h.name}")
-            .setContentText("Tick it when it's done.")
+            .setContentText(text)
+            .setContentIntent(openApp(ctx))
+            .setAutoCancel(!h.multi)
+            .setOnlyAlertOnce(!fromAlarm)
+            .addAction(
+                action(
+                    ctx,
+                    if (h.multi) "+1" else "Done",
+                    broadcast(ctx, ActionReceiver.ACTION_TICK_HABIT, 5000 + habitId.toInt(), h.id, ActionReceiver.SRC_HABIT),
+                )
+            )
+            .build()
+        nm(ctx).notify(ID_HABIT_BASE + habitId.toInt(), n)
+    }
+
+    /** Count already covers the slots passed so far (e.g. 4 of 8 by the middle of the range). */
+    private fun onTrack(h: Store.HabitItem): Boolean {
+        val start = h.reminder ?: return false
+        val slots = AlarmScheduler.slotMinutes(start, h.until, h.every) ?: return false
+        val c = java.util.Calendar.getInstance()
+        val nowMin = c.get(java.util.Calendar.HOUR_OF_DAY) * 60 + c.get(java.util.Calendar.MINUTE)
+        val passed = slots.count { it <= nowMin + 1 }
+        if (passed <= 0) return false
+        val expected = kotlin.math.ceil(h.target.toDouble() * passed / slots.size).toInt()
+        return h.count >= expected
+    }
+
+    // ---------- task reminder ----------
+
+    fun postTask(ctx: Context, taskId: Long) {
+        if (!canPost(ctx)) return
+        val store = Store(ctx)
+        store.rolloverTasks(LogicalDay.startOf(store.today(), store.resetHour()))
+        val t = store.taskReminder(taskId) ?: return
+        if (t.done) return
+        ensureChannels(ctx)
+        val n = Notification.Builder(ctx, CH_REMIND)
+            .setSmallIcon(R.drawable.ic_notif)
+            .setContentTitle(t.title)
+            .setContentText(if (t.repeatDaily) "Daily task reminder" else "Task reminder")
             .setContentIntent(openApp(ctx))
             .setAutoCancel(true)
             .addAction(
                 action(
                     ctx,
                     "Done",
-                    broadcast(ctx, ActionReceiver.ACTION_TICK_HABIT, 5000 + habitId.toInt(), h.id, ActionReceiver.SRC_HABIT),
+                    broadcast(ctx, ActionReceiver.ACTION_TICK_TASK, REQ_TASK_DONE_BASE + taskId.toInt(), t.id, ActionReceiver.SRC_TASK),
                 )
             )
             .build()
-        nm(ctx).notify(ID_HABIT_BASE + habitId.toInt(), n)
+        nm(ctx).notify(ID_TASK_BASE + taskId.toInt(), n)
     }
 
     fun cancel(ctx: Context, id: Int) = nm(ctx).cancel(id)
