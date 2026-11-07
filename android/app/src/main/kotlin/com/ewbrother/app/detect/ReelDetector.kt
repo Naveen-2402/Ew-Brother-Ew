@@ -53,7 +53,13 @@ class ReelDetector(private val screenSize: () -> Pair<Int, Int>) {
         var lastSeenAt: Long,
     )
 
-    private val polls = HashMap<String, PollState>()
+    /**
+     * One state per pager, per app. YouTube can have SEVERAL views with the Shorts pager ID attached
+     * at once (e.g. after starting on Home and then opening Shorts): the one you swipe and one or
+     * more covered ones. Android still reports covered views as "visible", so each pager is followed
+     * on its own: a covered pager never changes, so only the one being swiped can count.
+     */
+    private val polls = HashMap<String, HashMap<Int, PollState>>()
 
     /**
      * Forget the polled Short (not the scroll session) after a full-screen overlay closes, so the
@@ -62,6 +68,27 @@ class ReelDetector(private val screenSize: () -> Pair<Int, Int>) {
      */
     fun resetPoll(pkg: String) {
         polls.remove(pkg)
+    }
+
+    /**
+     * Look at every candidate pager of [pkg] once. Returns the new Shorts seen; at most one pager
+     * (the one being swiped) can change between two looks, so the counts don't add up twice.
+     */
+    fun onPagerPolls(pkg: String, pagers: List<Pair<AccessibilityNodeInfo, String>>, now: Long): Result {
+        if (pagers.isEmpty()) return none
+        // Drop pagers not seen for a while (a closed Shorts screen).
+        polls[pkg]?.values?.removeAll { now - it.lastSeenAt > DetectionRules.SESSION_GAP_MS }
+        var best = 0
+        var anyInFeed = false
+        val notes = ArrayList<String>()
+        for ((pager, id) in pagers) {
+            val r = onPagerPoll(pkg, pager, id, now)
+            notes.add(lastPollNote)
+            if (r.inFeed) anyInFeed = true
+            if (r.newReels > best) best = r.newReels
+        }
+        lastPollNote = if (notes.size == 1) notes[0] else "${notes.size} pagers: " + notes.joinToString(" | ")
+        return Result(anyInFeed, best)
     }
 
     /** What the last pager check saw, for the live log in Settings > Detection check. */
@@ -75,14 +102,17 @@ class ReelDetector(private val screenSize: () -> Pair<Int, Int>) {
      * counts 0. Without positions, any change of the Short on screen counts one.
      * The first look after entering is the baseline and never counts.
      */
-    fun onPagerPoll(pkg: String, pager: AccessibilityNodeInfo, id: String, now: Long): Result {
+    private fun onPagerPoll(pkg: String, pager: AccessibilityNodeInfo, id: String, now: Long): Result {
         remember(pkg, id, pager.className, true) // shows as counted in Settings > Detection check
         // Read live values, not the service's node cache: after an overlay (pause, interrupt) the
         // cache can hold the pager's old pages and the Short on screen would never seem to change.
         pager.refresh()
         val pr = Rect()
         pager.getBoundsInScreen(pr)
-        if (pr.height() <= 0) return none
+        if (pr.height() <= 0) {
+            lastPollNote = "pager has no size"
+            return none
+        }
 
         // The page that fills most of the pager; none while mid-swipe (two half pages).
         var current: AccessibilityNodeInfo? = null
@@ -107,9 +137,10 @@ class ReelDetector(private val screenSize: () -> Pair<Int, Int>) {
             (if (index != null) "row $index" else "#${Integer.toHexString(item)}")
         val key = pager.hashCode() * 31 + pager.windowId
 
-        val p = polls[pkg]
-        if (p == null || p.pagerKey != key || now - p.lastSeenAt > DetectionRules.SESSION_GAP_MS) {
-            polls[pkg] = PollState(key, index ?: -1, item, now) // baseline
+        val states = polls.getOrPut(pkg) { HashMap() }
+        val p = states[key]
+        if (p == null || now - p.lastSeenAt > DetectionRules.SESSION_GAP_MS) {
+            states[key] = PollState(key, index ?: -1, item, now) // baseline
             return Result(true, 0)
         }
         p.lastSeenAt = now

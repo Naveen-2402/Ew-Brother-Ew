@@ -6,6 +6,7 @@ import 'app_controller.dart';
 import 'core/theme.dart';
 import 'features/habits/habits_screen.dart';
 import 'features/habits/habits_view_model.dart';
+import 'features/play/play_screen.dart';
 import 'features/stats/stats_screen.dart';
 import 'features/stats/stats_view_model.dart';
 import 'features/tasks/tasks_screen.dart';
@@ -66,7 +67,7 @@ class _Shell extends StatefulWidget {
 }
 
 class _ShellState extends State<_Shell> with SingleTickerProviderStateMixin {
-  static const _pages = [TodayScreen(), TasksScreen(), HabitsScreen(), StatsScreen()];
+  static const _pages = [TodayScreen(), TasksScreen(), HabitsScreen(), StatsScreen(), PlayScreen()];
 
   late final TabIndex _tab = context.read<TabIndex>();
   late final AnimationController _enter = AnimationController(
@@ -147,13 +148,14 @@ class _NavBar extends StatelessWidget {
     (label: 'Tasks', icon: Icons.check_circle_outline_rounded, active: Icons.check_circle_rounded),
     (label: 'Habits', icon: Icons.local_florist_outlined, active: Icons.local_florist_rounded),
     (label: 'Stats', icon: Icons.insights_outlined, active: Icons.insights_rounded),
+    (label: 'Play', icon: Icons.extension_outlined, active: Icons.extension_rounded),
   ];
 
   @override
   Widget build(BuildContext context) {
     final c = context.ew;
     final dark = Theme.of(context).brightness == Brightness.dark;
-    const n = 4;
+    final n = _items.length;
     return ColoredBox(
       color: c.bg,
       child: SafeArea(

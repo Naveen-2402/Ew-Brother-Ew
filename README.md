@@ -15,6 +15,7 @@ Android only (minSdk 26, targetSdk 36, so Android 8 and newer). Works on any And
 | Tasks | Quick add, top 3 stars, repeat daily, reminders (once at a date and time, or daily for repeating tasks, with a Done button on the notification), swipe right to finish, swipe left to delete, drag to reorder. |
 | Habits | One tap to tick today, or several times a day (e.g. 8 glasses of water: each tap adds one, done at 8 whenever you do them). Reminders: off, once, or every 15 min to 3 h within a time range; range reminders stay quiet when you're on track and stop once it's done. 7-day strip, streaks, and a history sheet per habit (current and best streak, last 30 days, total, 5-week calendar). |
 | Stats and history | 7 / 30 / 90 days, 1 year or any custom range. Look at reels (both apps or one), screen time, habits or tasks. Totals, daily average, change against the previous period, best and worst day, and a day-by-day list. Tap any day or bar for its full details. |
+| Play | A tab of short brain games to reach for instead of the feed: **Math Sprint** (60 s of mental arithmetic that gets harder), **What comes next** (10 number patterns), **Think different** (lateral-thinking and logic puzzles with hints). Best scores are kept on the phone. |
 | Extras | Home-screen widget, Quick Settings tile and status notification with pause/resume (both ask you to unlock first when the phone is locked), morning top 3, evening habit check, Sunday summary, backup and restore to a file. |
 
 ## How it works

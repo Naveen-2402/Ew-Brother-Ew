@@ -6,6 +6,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.graphics.Rect
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -380,22 +381,33 @@ class EwAccessibilityService : AccessibilityService() {
         root.refresh() // live tree, not the cached one (see ReelDetector.onPagerPoll)
         // Built-in pager IDs, plus any ID for this app added in Settings > Detection check.
         val ids = DetectionRules.POLL_PAGER_IDS[pkg].orEmpty() + detector.extraIds.filter { it.startsWith("$pkg:id/") }
+        // EVERY full-height pager with a Shorts ID, not just the first one found. YouTube can keep
+        // more than one attached (Home's Shorts row underneath, the Shorts player on top, a Shorts
+        // screen opened earlier), and Android reports covered views as visible too. Taking only
+        // the first one could lock onto a covered pager that never changes: then nothing counted.
+        // Small ones (a Shorts row in the Home feed) are never the full-screen player.
+        val minHeight = resources.displayMetrics.heightPixels * DetectionRules.PAGER_MIN_SCREEN_RATIO
+        val bounds = Rect()
+        val pagers = ArrayList<Pair<AccessibilityNodeInfo, String>>()
         for (id in ids) {
             val found = try {
                 root.findAccessibilityNodeInfosByViewId(id)
             } catch (e: Exception) {
                 null
             } ?: continue
-            val pager = found.firstOrNull { it.isVisibleToUser } ?: continue
-            val now = trustedNow()
-            ensureToday(now)
-            val result = detector.onPagerPoll(pkg, pager, id, now)
-            pollNote(detector.lastPollNote)
-            if (result.newReels > 0) dbg("check -> +${result.newReels}")
-            onFeedResult(pkg, result, now, SRC_POLL)
-            return
+            for (node in found) {
+                if (!node.isVisibleToUser) continue
+                node.getBoundsInScreen(bounds)
+                if (bounds.height() >= minHeight) pagers.add(node to id)
+            }
         }
-        pollNote("no Shorts pager on screen")
+        if (pagers.isEmpty()) return pollNote("no Shorts player on screen")
+        val now = trustedNow()
+        ensureToday(now)
+        val result = detector.onPagerPolls(pkg, pagers, now)
+        pollNote(detector.lastPollNote)
+        if (result.newReels > 0) dbg("check -> +${result.newReels}")
+        onFeedResult(pkg, result, now, SRC_POLL)
     }
 
     private var lastPollLogged = ""
@@ -710,14 +722,30 @@ class EwAccessibilityService : AccessibilityService() {
     }
 
     /** After ignoring a window event in a reel app: if you did leave after all, catch up. */
-    private val frontCheck = Runnable {
-        if (!isReelApp(foreground)) return@Runnable
-        val front = frontApp() ?: return@Runnable
-        if (front != foreground) onWindowChanged(if (front == packageName) SELF_PKG else front)
+    // Re-checks left for the current ignored window event. One look at 0.8 s was not enough: the
+    // home-screen animation on some phones (HyperOS) is longer, the reel app still looked like it
+    // was in front, the exit was never recorded, and the next open then skipped the
+    // "What is your goal?" screen. Now it looks again at 0.8 s, 2 s and 4 s.
+    private var frontChecksLeft = 0
+
+    private val frontCheck = object : Runnable {
+        override fun run() {
+            if (!isReelApp(foreground)) return
+            val front = frontApp()
+            if (front != null && front != foreground) {
+                dbg("re-check: ${short(foreground)} left, now ${short(front)}")
+                onWindowChanged(if (front == packageName) SELF_PKG else front)
+                return
+            }
+            if (--frontChecksLeft > 0) {
+                mainHandler.postDelayed(this, if (frontChecksLeft == 2) 1_200L else 2_000L)
+            }
+        }
     }
 
     private fun scheduleFrontCheck() {
         mainHandler.removeCallbacks(frontCheck)
+        frontChecksLeft = 3
         mainHandler.postDelayed(frontCheck, FRONT_CHECK_MS)
     }
 

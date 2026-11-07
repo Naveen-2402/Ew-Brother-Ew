@@ -52,6 +52,9 @@ object DetectionRules {
     /** How often the YouTube Shorts pager is checked while YouTube is in front and the screen is on. */
     const val PAGER_POLL_MS = 700L
 
+    /** A Shorts pager must be at least this tall (share of the screen) to be the full-screen player. */
+    const val PAGER_MIN_SCREEN_RATIO = 0.5f
+
     /** A page counts as "on screen" when it fills this much of the pager's height. */
     const val PAGE_VISIBLE_RATIO = 0.6f
 

@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import 'core/native_bridge.dart';
 import 'data/app_database.dart';
+import 'data/games_repository.dart';
 import 'data/repositories.dart';
 import 'ui/app.dart';
 import 'ui/app_controller.dart';
@@ -39,6 +40,7 @@ Future<void> main() async {
         Provider<TasksRepository>(create: (_) => TasksRepository(database, bridge, signal, () => app.dayStart)),
         Provider<HabitsRepository>(create: (_) => HabitsRepository(database, bridge, signal)),
         Provider<UsageRepository>(create: (_) => UsageRepository(database, bridge)),
+        Provider<GamesRepository>(create: (_) => GamesRepository(database)),
         Provider<HistoryRepository>(
           create: (c) => HistoryRepository(
             database,
